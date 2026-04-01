@@ -65,24 +65,29 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
+        section.main > div.block-container {
+          max-width: 1080px;
+          padding-top: 1.1rem;
+          padding-bottom: 2rem;
+        }
         .service-title {
           text-align: center;
-          font-size: 33px; /* 25pt */
+          font-size: 32px; /* tablet primary */
           font-weight: 800;
           margin-bottom: 2px;
         }
         .service-subtitle {
           text-align: center;
-          font-size: 20px; /* 15pt */
+          font-size: 20px; /* tablet secondary */
           font-weight: 600;
           margin-bottom: 14px;
           opacity: 0.95;
         }
         .step-box {
           text-align: center;
-          font-size: 31px;
+          font-size: 24px;
           font-weight: 700;
-          padding: 12px 4px;
+          padding: 10px 4px;
           border-radius: 10px;
         }
         .step-active {
@@ -106,6 +111,32 @@ def inject_css() -> None:
           opacity: 0.9;
           text-align: right;
           margin-bottom: 4px;
+        }
+        [data-testid="stButton"] > button,
+        [data-testid="stDownloadButton"] > button {
+          min-height: 44px !important;
+          border-radius: 10px !important;
+          font-size: 16px !important;
+        }
+        [data-testid="stTextInput"] input,
+        [data-testid="stNumberInput"] input,
+        [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
+          min-height: 44px !important;
+          border-radius: 10px !important;
+        }
+        [data-testid="stExpander"] summary {
+          font-size: 18px !important;
+          font-weight: 700 !important;
+        }
+        @media (max-width: 1200px) {
+          section.main > div.block-container { max-width: 960px; }
+          .service-title { font-size: 28px; }
+          .service-subtitle { font-size: 18px; }
+          .step-box { font-size: 20px; }
+        }
+        @media (max-width: 860px) {
+          .top-meta-right { text-align: left; }
+          .step-box { font-size: 17px; padding: 8px 2px; }
         }
         </style>
         """,
@@ -237,7 +268,7 @@ def _canonical_university_map(base_2026: pd.DataFrame) -> Dict[str, str]:
 
 def _remove_excluded_type(admission_type: str, track_name: str) -> bool:
     joined = (str(admission_type) + " " + str(track_name)).replace(" ", "")
-    return "교과기회" in joined
+    return ("교과기회" in joined) or ("기회종합" in joined)
 
 
 def _extract_year_from_col(col_name: str) -> Optional[int]:
@@ -893,7 +924,8 @@ def _consultant_panel() -> str:
 
 def _choice_input_block(susi_df: pd.DataFrame, no: int) -> Tuple[str, str, str, str]:
     st.markdown(f"지원 {no}")
-    a, b, c, d = st.columns(4)
+    a, b = st.columns(2)
+    c, d = st.columns(2)
     uni_options = sorted(susi_df["university"].dropna().unique().tolist())
 
     with a:
@@ -913,10 +945,11 @@ def _choice_input_block(susi_df: pd.DataFrame, no: int) -> Tuple[str, str, str, 
 
     filtered_dept = filtered_uni[filtered_uni["department"] == dept_text] if dept_text else filtered_uni
     atype_options = sorted(filtered_dept["admission_type"].dropna().unique().tolist())
-    track_options = sorted(filtered_dept["track_name"].dropna().unique().tolist()) or [""]
 
     with c:
         atype = st.selectbox(f"전형유형 {no}", atype_options or ADMISSION_TYPES, key=f"atype_{no}")
+    filtered_type = filtered_dept[filtered_dept["admission_type"] == atype] if atype else filtered_dept
+    track_options = sorted(filtered_type["track_name"].dropna().unique().tolist()) or [""]
     with d:
         track = st.selectbox(f"전형명 {no}", ["직접입력"] + track_options, key=f"track_{no}")
         track_text = st.text_input(f"전형명 직접입력 {no}", key=f"track_txt_{no}") if track == "직접입력" else track
