@@ -980,7 +980,30 @@ def main() -> None:
         with c3:
             if st.button("다음 단계", use_container_width=True):
                 if not st.session_state.holistic:
-                    st.warning("먼저 분석 실행을 눌러 주세요.")
+                    if pdf_file:
+                        grade_score = calc_grade if calc_grade is not None else float(manual_grade)
+                        grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+                        st.session_state.holistic = {
+                            "pdf_summary": "PDF 텍스트 추출 불가로 학생부 분석을 생략하고 3단계로 이동합니다.",
+                            "holistic_level": 0,
+                            "holistic_detail": {
+                                "학업역량": 0,
+                                "전공적합성": 0,
+                                "자기주도성": 0,
+                                "공동체역량": 0,
+                                "발전가능성": 0,
+                            },
+                            "holistic_evidence": {},
+                            "holistic_score": 0.0,
+                            "student_grade_score": grade_score_9,
+                            "student_grade_source": f"분석 생략 | {grade_policy}",
+                            "student_grade_raw": grade_score,
+                        }
+                        st.warning("학생부 분석이 불가하여 분석을 생략하고 3단계로 이동합니다.")
+                        st.session_state.step = 3
+                        st.rerun()
+                    else:
+                        st.warning("먼저 학생부 PDF를 업로드하거나 분석 실행을 눌러 주세요.")
                 else:
                     st.session_state.step = 3
                     st.rerun()
