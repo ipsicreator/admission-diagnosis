@@ -93,6 +93,18 @@ def inject_css() -> None:
           opacity: 0.85;
           font-size: 14px;
         }
+        .top-meta-left {
+          font-size: 13px;
+          opacity: 0.9;
+          text-align: left;
+          margin-bottom: 4px;
+        }
+        .top-meta-right {
+          font-size: 13px;
+          opacity: 0.9;
+          text-align: right;
+          margin-bottom: 4px;
+        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -722,7 +734,17 @@ def main() -> None:
 
     st.markdown("<div class='service-title'>나의 입시 위치 진단서비스</div>", unsafe_allow_html=True)
     st.markdown("<div class='service-subtitle'>by 대치수프리마</div>", unsafe_allow_html=True)
-    st.caption("기준: 2026+2027 수시 병합(충돌 시 2027 우선), 2023~2025 50/70컷")
+    meta_l, meta_r = st.columns([3, 4])
+    with meta_l:
+        st.markdown(
+            "<div class='top-meta-left'>기준: 2026+2027 수시 병합(충돌 시 2027 우선), 2023~2025 50/70컷</div>",
+            unsafe_allow_html=True,
+        )
+    with meta_r:
+        st.markdown(
+            "<div class='top-meta-right'>대학기준: 2026 183개 대학 및 2027 수시 모집요강 발표한 서울경기지역 학교</div>",
+            unsafe_allow_html=True,
+        )
 
     with st.sidebar:
         st.markdown("### 운영 설정")
@@ -763,9 +785,6 @@ def main() -> None:
                     st.success("평가기준 데이터 반영 완료")
 
     susi_df, cutoff_df, _criteria_df = load_data(dataset_mode=dataset_mode)
-    st.caption(f"대학 목록 데이터: {len(susi_df)}건 | 컷 데이터(2023~2025): {len(cutoff_df)}건")
-    if cutoff_df.empty:
-        st.warning("컷 데이터(2023~2025)가 없어 '입결 데이터 없음'으로 표기됩니다.")
 
     if "step" not in st.session_state:
         st.session_state.step = 1
