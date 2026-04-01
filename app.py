@@ -894,12 +894,18 @@ def save_session(payload: Dict, choices: List[SupportChoice]) -> None:
         conn.close()
 
 
-def _step_header(current_step: int) -> None:
-    labels = ["1. 사용자정보", "2. 학생부 분석", "3. 희망대학 지원", "4. 종합 보고서"]
-    cols = st.columns(4)
-    for i, (col, label) in enumerate(zip(cols, labels), start=1):
+def _step_header(current_step: str) -> None:
+    labels = [
+        ("1", "1. 사용자정보"),
+        ("1.5", "1.5 내신 계산"),
+        ("2", "2. 학생부 분석"),
+        ("3", "3. 희망대학 지원"),
+        ("4", "4. 종합 보고서"),
+    ]
+    cols = st.columns(5)
+    for col, (step_key, label) in zip(cols, labels):
         with col:
-            cls = "step-box step-active" if i == current_step else "step-box"
+            cls = "step-box step-active" if step_key == current_step else "step-box"
             st.markdown(f"<div class='{cls}'>{label}</div>", unsafe_allow_html=True)
 
 
@@ -1012,7 +1018,7 @@ def main() -> None:
     susi_df, cutoff_df, _criteria_df = load_data(dataset_mode=dataset_mode)
 
     if "step" not in st.session_state:
-        st.session_state.step = 1
+        st.session_state.step = "1"
     if "profile" not in st.session_state:
         st.session_state.profile = {}
     if "holistic" not in st.session_state:
@@ -1030,7 +1036,7 @@ def main() -> None:
     st.markdown("---")
 
     # Step 1
-    if st.session_state.step == 1:
+    if st.session_state.step == "1":
         st.subheader("1단계 - 사용자정보")
         with st.form("step1_form"):
             c1, c2 = st.columns(2)
@@ -1069,172 +1075,111 @@ def main() -> None:
                     "email": email.strip(),
                     "parent_phone": parent_phone.strip(),
                 }
-                st.session_state.step = 2
+                st.session_state.step = "1.5"
                 st.rerun()
 
-    # Step 2
-    elif st.session_state.step == 2:
-        st.subheader("2단계 - 학생부 분석")
-        mode = st.radio(
-            "2단계 작업 선택",
-            ["학생부 PDF 분석", "내신 계산(엑셀)"],
-            horizontal=True,
-        )
+    # Step 1.5
+    elif st.session_state.step == "1.5":
+        st.subheader("1.5단계 - 내신 성적 계산/입력")
         current_grade_label = st.session_state.profile.get("grade", "")
         curriculum_label, curriculum_file, curriculum_token = expected_curriculum_by_grade(current_grade_label)
         st.caption(f"현재 입력 학년: {current_grade_label} | 적용 내신 과정: {curriculum_label}")
-        if current_grade_label in ["고1", "고2"]:
-            st.info("내신 계산 안내: 고1~2학년은 5등급제를 9등급제로 환산하여 판단합니다.")
-        else:
-            st.info("내신 계산 안내: 고3 및 N수 이상은 9등급제 기준으로 판단합니다.")
+        st.info("계산이 필요한 경우 엑셀 화면에서 계산 후 입력하세요.")
 
-        grades_text = ""
-        manual_grade = 2.5
-        calc_grade = None
+        if curriculum_file.exists():
+            st.download_button(
+                f"{curriculum_label} 엑셀 템플릿 다운로드",
+                data=curriculum_file.read_bytes(),
+                file_name=curriculum_file.name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        excel_file = st.file_uploader(f"내신 계산 엑셀 업로드(xlsx) - {curriculum_label}", type=["xlsx"], key="grade_xlsx_step15")
+        if excel_file and (curriculum_token not in excel_file.name):
+            st.warning(f"현재 학년({current_grade_label})은 {curriculum_label} 파일 사용 대상입니다.")
 
-        if mode == "학생부 PDF 분석":
-            lpad, center, rpad = st.columns([1, 2, 1])
-            with center:
-                pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
-            g1, g2 = st.columns(2)
-            with g1:
-                grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4", key="grades_text_pdf")
-            with g2:
-                manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01, key="manual_grade_pdf")
+        manual_grade = st.number_input("내신 평균 직접 입력(선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01, key="manual_grade_step15")
 
-            if grades_text.strip():
-                try:
-                    vals = [float(x.strip()) for x in grades_text.split(",") if x.strip()]
-                    if vals:
-                        calc_grade = round(sum(vals) / len(vals), 2)
-                        st.caption(f"자동 계산 내신 평균: {calc_grade}")
-                except Exception:
-                    st.warning("내신 등급 형식이 올바르지 않습니다. 예: 2.1, 2.3, 1.9")
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("이전 단계"):
+                st.session_state.step = "1"
+                st.rerun()
+        with c2:
+            if st.button("내신 계산/저장", use_container_width=True):
+                points = extract_grade_points_from_excel(excel_file) if excel_file else []
+                if points:
+                    raw_grade = round(sum(points) / len(points), 2)
+                    grade_source = f"엑셀 계산({len(points)}개)"
+                else:
+                    raw_grade = float(manual_grade)
+                    grade_source = "직접 입력"
+                grade_score_9, grade_policy = convert_grade_to_9_scale(raw_grade, current_grade_label)
+                st.session_state.holistic = {
+                    "pdf_summary": st.session_state.holistic.get("pdf_summary", ""),
+                    "holistic_level": st.session_state.holistic.get("holistic_level", 0),
+                    "holistic_detail": st.session_state.holistic.get(
+                        "holistic_detail",
+                        {"학업역량": 0, "전공적합성": 0, "자기주도성": 0, "공동체역량": 0, "발전가능성": 0},
+                    ),
+                    "holistic_evidence": st.session_state.holistic.get("holistic_evidence", {}),
+                    "holistic_score": st.session_state.holistic.get("holistic_score", 0.0),
+                    "student_grade_score": grade_score_9,
+                    "student_grade_source": f"{grade_source} | {grade_policy}",
+                    "student_grade_raw": raw_grade,
+                }
+                st.success(f"내신 저장 완료: {grade_score_9:.2f} (판단용 9등급)")
+        with c3:
+            if st.button("다음 단계", use_container_width=True):
+                if not st.session_state.holistic.get("student_grade_score"):
+                    st.warning("먼저 내신 계산/저장을 진행해 주세요.")
+                else:
+                    st.session_state.step = "2"
+                    st.rerun()
 
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("PDF 분석 실행", use_container_width=True):
-                    if not pdf_file:
+    # Step 2
+    elif st.session_state.step == "2":
+        st.subheader("2단계 - 학생부 분석")
+        lpad, center, rpad = st.columns([1, 2, 1])
+        with center:
+            pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
+
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if st.button("이전 단계"):
+                st.session_state.step = "1.5"
+                st.rerun()
+        with c2:
+            if st.button("분석 실행", use_container_width=True):
+                if not pdf_file:
+                    st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
+                else:
+                    text, text_source = extract_pdf_text(pdf_file)
+                    if not str(text).strip():
                         st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
                     else:
-                        text, text_source = extract_pdf_text(pdf_file)
-                        if not str(text).strip():
-                            st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
-                        else:
-                            level, detail, summary, evidence = analyze_holistic_5level(text)
-                            pdf_points = extract_grade_points_from_pdf_text(text)
-                            if calc_grade is not None:
-                                grade_score = calc_grade
-                                grade_source = "수기 입력 계산"
-                            elif pdf_points:
-                                grade_score = round(sum(pdf_points) / len(pdf_points), 2)
-                                grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
-                            else:
-                                grade_score = float(manual_grade)
-                                grade_source = "직접 입력"
-                            grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
-                            st.session_state.holistic = {
+                        level, detail, summary, evidence = analyze_holistic_5level(text)
+                        current_grade_label = st.session_state.profile.get("grade", "")
+                        base_grade = float(st.session_state.holistic.get("student_grade_raw", st.session_state.holistic.get("student_grade_score", 2.5)))
+                        grade_score_9, grade_policy = convert_grade_to_9_scale(base_grade, current_grade_label)
+                        st.session_state.holistic.update(
+                            {
                                 "pdf_summary": summary,
                                 "holistic_level": level,
                                 "holistic_detail": detail,
                                 "holistic_evidence": evidence,
                                 "holistic_score": sum(detail.values()) / len(detail),
                                 "student_grade_score": grade_score_9,
-                                "student_grade_source": f"{grade_source} | {grade_policy}",
+                                "student_grade_source": f"{st.session_state.holistic.get('student_grade_source', '내신값 유지')} | {grade_policy}",
                                 "pdf_text_source": text_source,
-                                "student_grade_raw": grade_score,
                             }
-                            st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
-            with c2:
-                if st.button("분석 생략 후 3단계 이동", use_container_width=True):
-                    base_grade = calc_grade if calc_grade is not None else float(manual_grade)
-                    grade_score_9, grade_policy = convert_grade_to_9_scale(base_grade, current_grade_label)
-                    st.session_state.holistic = {
-                        "pdf_summary": "학생부 분석 생략",
-                        "holistic_level": 0,
-                        "holistic_detail": {
-                            "학업역량": 0,
-                            "전공적합성": 0,
-                            "자기주도성": 0,
-                            "공동체역량": 0,
-                            "발전가능성": 0,
-                        },
-                        "holistic_evidence": {},
-                        "holistic_score": 0.0,
-                        "student_grade_score": grade_score_9,
-                        "student_grade_source": f"분석 생략 | {grade_policy}",
-                        "student_grade_raw": base_grade,
-                    }
-                    st.session_state.step = 3
-                    st.rerun()
-
-        else:
-            lpad, center, rpad = st.columns([1, 2, 1])
-            with center:
-                st.markdown(f"**엑셀 내신 계산 화면 ({curriculum_label})**")
-                if curriculum_file.exists():
-                    st.download_button(
-                        f"{curriculum_label} 템플릿 다운로드",
-                        data=curriculum_file.read_bytes(),
-                        file_name=curriculum_file.name,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                excel_file = st.file_uploader(
-                    f"내신 계산 엑셀 업로드(xlsx) - {curriculum_label}",
-                    type=["xlsx"],
-                    key="grade_xlsx_step2",
-                )
-                if excel_file and (curriculum_token not in excel_file.name):
-                    st.warning(f"현재 학년({current_grade_label})은 {curriculum_label} 사용 대상입니다. 업로드 파일을 다시 확인해 주세요.")
-
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("엑셀 내신 계산", use_container_width=True):
-                    if not excel_file:
-                        st.warning(f"{curriculum_label} 엑셀 파일을 먼저 업로드해 주세요.")
-                    else:
-                        points = extract_grade_points_from_excel(excel_file)
-                        if not points:
-                            st.error("엑셀에서 등급 데이터를 찾지 못했습니다. 파일 형식을 확인해 주세요.")
-                        else:
-                            raw_grade = round(sum(points) / len(points), 2)
-                            grade_score_9, grade_policy = convert_grade_to_9_scale(raw_grade, current_grade_label)
-                            st.session_state.holistic = {
-                                "pdf_summary": "엑셀 내신 계산으로 진행",
-                                "holistic_level": 0,
-                                "holistic_detail": {
-                                    "학업역량": 0,
-                                    "전공적합성": 0,
-                                    "자기주도성": 0,
-                                    "공동체역량": 0,
-                                    "발전가능성": 0,
-                                },
-                                "holistic_evidence": {},
-                                "holistic_score": 0.0,
-                                "student_grade_score": grade_score_9,
-                                "student_grade_source": f"엑셀 계산({len(points)}개) | {grade_policy}",
-                                "student_grade_raw": raw_grade,
-                            }
-                            st.success("엑셀 내신 계산이 완료되었습니다.")
-            with c2:
-                if st.button("3단계 이동", use_container_width=True):
-                    if not st.session_state.holistic:
-                        st.warning("먼저 엑셀 내신 계산을 실행해 주세요.")
-                    else:
-                        st.session_state.step = 3
-                        st.rerun()
-
-        cnav1, cnav2 = st.columns(2)
-        with cnav1:
-            if st.button("이전 단계"):
-                st.session_state.step = 1
-                st.rerun()
-        with cnav2:
+                        )
+                        st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
+        with c3:
             if st.button("다음 단계", use_container_width=True):
-                if not st.session_state.holistic:
-                    st.warning("2단계 작업(분석 또는 내신 계산)을 먼저 실행해 주세요.")
+                if not st.session_state.holistic.get("holistic_detail"):
+                    st.warning("먼저 학생부 분석 실행을 해주세요.")
                 else:
-                    st.session_state.step = 3
+                    st.session_state.step = "3"
                     st.rerun()
 
         if st.session_state.holistic:
@@ -1267,8 +1212,13 @@ def main() -> None:
             st.info("학생부 PDF를 업로드하고 '분석 실행'을 누르면 이 영역에 결과가 표시됩니다.")
 
     # Step 3
-    elif st.session_state.step == 3:
+    elif st.session_state.step == "3":
         st.subheader("3단계 - 희망대학 지원 (최대 6개)")
+        if st.session_state.holistic.get("student_grade_score"):
+            st.info(
+                f"내신값(판단용 9등급): {st.session_state.holistic.get('student_grade_score'):.2f} | "
+                f"산출기준: {st.session_state.holistic.get('student_grade_source', '-')}"
+            )
         supports: List[Tuple[str, str, str, str]] = []
 
         for no in range(1, 7):
@@ -1282,7 +1232,7 @@ def main() -> None:
             nxt = st.button("평가 후 보고서 보기", use_container_width=True)
 
         if back:
-            st.session_state.step = 2
+            st.session_state.step = "2"
             st.rerun()
 
         if nxt:
@@ -1299,7 +1249,7 @@ def main() -> None:
                 st.warning("최소 1개 이상의 지원 대학/학과/전형 정보를 입력해 주세요.")
             else:
                 st.session_state.supports = [r.__dict__ for r in rows]
-                st.session_state.step = 4
+                st.session_state.step = "4"
                 st.rerun()
 
     # Step 4
@@ -1335,11 +1285,11 @@ def main() -> None:
         c1, c2 = st.columns(2)
         with c1:
             if st.button("이전 단계"):
-                st.session_state.step = 3
+                st.session_state.step = "3"
                 st.rerun()
         with c2:
             if st.button("새 진단 시작", use_container_width=True):
-                st.session_state.step = 1
+                st.session_state.step = "1"
                 st.session_state.profile = {}
                 st.session_state.holistic = {}
                 st.session_state.supports = []
