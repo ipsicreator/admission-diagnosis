@@ -1,5 +1,6 @@
 ﻿import io
 import json
+import re
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -369,6 +370,50 @@ def extract_pdf_text(uploaded_file) -> str:
     return "\n".join((page.extract_text() or "") for page in reader.pages)
 
 
+def extract_grade_points_from_pdf_text(pdf_text: str) -> List[float]:
+    text = str(pdf_text or "")
+    if not text.strip():
+        return []
+    pattern = re.compile(r"(?:(\d(?:\.\d+)?)\s*등급|등급\s*(\d(?:\.\d+)?))")
+    vals: List[float] = []
+    for m in pattern.finditer(text):
+        a, b = m.groups()
+        raw = a if a is not None else b
+        try:
+            v = float(raw)
+        except Exception:
+            continue
+        if 1.0 <= v <= 9.0:
+            vals.append(v)
+    return vals
+
+
+def extract_grade_points_from_excel(uploaded_file) -> List[float]:
+    if not uploaded_file:
+        return []
+    vals: List[float] = []
+    try:
+        sheets = pd.read_excel(uploaded_file, sheet_name=None)
+    except Exception:
+        return []
+
+    for _name, df in sheets.items():
+        if df is None or df.empty:
+            continue
+        cols = [str(c) for c in df.columns]
+        preferred = [c for c in cols if ("등급" in c) or ("내신" in c)]
+        scan_cols = preferred if preferred else cols
+        for c in scan_cols:
+            series = pd.to_numeric(df[c], errors="coerce").dropna()
+            if series.empty:
+                continue
+            for v in series.tolist():
+                fv = float(v)
+                if 1.0 <= fv <= 9.0:
+                    vals.append(fv)
+    return vals
+
+
 def analyze_holistic_5level(pdf_text: str) -> Tuple[int, Dict[str, int], str]:
     text = (pdf_text or "").strip()
     if not text:
@@ -468,6 +513,7 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
         f"- 이메일: {payload.get('email', '')}",
         f"- 학부모 연락처: {payload.get('parent_phone', '')}",
         f"- 내신 등급(평균): {payload.get('student_grade_score', '')}",
+        f"- 내신 산출 기준: {payload.get('student_grade_source', '')}",
         "",
         "## 2) 학생부 분석 (5단계)",
         f"- 종합단계: {payload.get('holistic_level', 0)}단계",
@@ -514,6 +560,7 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
         ("이메일", payload.get("email", "")),
         ("학부모 연락처", payload.get("parent_phone", "")),
         ("내신 등급(평균)", payload.get("student_grade_score", "")),
+        ("내신 산출 기준", payload.get("student_grade_source", "")),
     ]
     for k, v in info_rows:
         doc.add_paragraph(f"- {k}: {v}")
@@ -787,6 +834,7 @@ def main() -> None:
         lpad, center, rpad = st.columns([1, 2, 1])
         with center:
             pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
+        excel_file = st.file_uploader("내신 계산 엑셀 업로드(xlsx)", type=["xlsx"], key="grade_xlsx_step2")
         g1, g2 = st.columns(2)
         with g1:
             grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4")
@@ -794,11 +842,13 @@ def main() -> None:
             manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01)
 
         calc_grade = None
+        calc_source = ""
         if grades_text.strip():
             try:
                 vals = [float(x.strip()) for x in grades_text.split(",") if x.strip()]
                 if vals:
                     calc_grade = round(sum(vals) / len(vals), 2)
+                    calc_source = f"수기 입력({len(vals)}개)"
                     st.caption(f"자동 계산 내신 평균: {calc_grade}")
             except Exception:
                 st.warning("내신 등급 형식이 올바르지 않습니다. 예: 2.1, 2.3, 1.9")
@@ -812,13 +862,29 @@ def main() -> None:
             if st.button("분석 실행", use_container_width=True):
                 text = extract_pdf_text(pdf_file) if pdf_file else ""
                 level, detail, summary = analyze_holistic_5level(text)
-                grade_score = calc_grade if calc_grade is not None else float(manual_grade)
+                excel_points = extract_grade_points_from_excel(excel_file)
+                pdf_points = extract_grade_points_from_pdf_text(text)
+
+                if excel_points:
+                    grade_score = round(sum(excel_points) / len(excel_points), 2)
+                    grade_source = f"엑셀 계산({len(excel_points)}개)"
+                elif calc_grade is not None:
+                    grade_score = calc_grade
+                    grade_source = calc_source or "수기 입력 계산"
+                elif pdf_points:
+                    grade_score = round(sum(pdf_points) / len(pdf_points), 2)
+                    grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
+                else:
+                    grade_score = float(manual_grade)
+                    grade_source = "직접 입력"
+
                 st.session_state.holistic = {
                     "pdf_summary": summary,
                     "holistic_level": level,
                     "holistic_detail": detail,
                     "holistic_score": sum(detail.values()) / len(detail),
                     "student_grade_score": grade_score,
+                    "student_grade_source": grade_source,
                 }
                 st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
         with c3:
@@ -839,6 +905,7 @@ def main() -> None:
             with m2:
                 st.metric("평균 점수", f"{st.session_state.holistic.get('holistic_score', 0):.1f}")
             st.metric("내신 평균", f"{st.session_state.holistic.get('student_grade_score', 0):.2f}")
+            st.caption(f"내신 산출 기준: {st.session_state.holistic.get('student_grade_source', '-')}")
             for k, v in detail.items():
                 st.write(f"- {k}: {v}점")
                 st.progress(min(max(int(v), 0), 100))
@@ -933,3 +1000,5 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+
+

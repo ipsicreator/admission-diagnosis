@@ -3,3 +3,4 @@ pandas
 pypdf
 reportlab
 python-docx
+openpyxl
