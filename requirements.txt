@@ -4,5 +4,3 @@ pypdf
 reportlab
 python-docx
 openpyxl
-PyMuPDF
-rapidocr-onnxruntime
