@@ -906,85 +906,112 @@ def main() -> None:
     # Step 2
     elif st.session_state.step == 2:
         st.subheader("2단계 - 학생부 분석")
-        lpad, center, rpad = st.columns([1, 2, 1])
-        with center:
-            pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
-        excel_file = st.file_uploader("내신 계산 엑셀 업로드(xlsx)", type=["xlsx"], key="grade_xlsx_step2")
-        g1, g2 = st.columns(2)
-        with g1:
-            grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4")
-        with g2:
-            manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01)
+        mode = st.radio(
+            "2단계 작업 선택",
+            ["학생부 PDF 분석", "내신 계산(엑셀)"],
+            horizontal=True,
+        )
         current_grade_label = st.session_state.profile.get("grade", "")
         if current_grade_label in ["고1", "고2"]:
             st.info("내신 계산 안내: 고1~2학년은 5등급제를 9등급제로 환산하여 판단합니다.")
         else:
             st.info("내신 계산 안내: 고3 및 N수 이상은 9등급제 기준으로 판단합니다.")
 
+        grades_text = ""
+        manual_grade = 2.5
         calc_grade = None
-        calc_source = ""
-        if grades_text.strip():
-            try:
-                vals = [float(x.strip()) for x in grades_text.split(",") if x.strip()]
-                if vals:
-                    calc_grade = round(sum(vals) / len(vals), 2)
-                    calc_source = f"수기 입력({len(vals)}개)"
-                    st.caption(f"자동 계산 내신 평균: {calc_grade}")
-            except Exception:
-                st.warning("내신 등급 형식이 올바르지 않습니다. 예: 2.1, 2.3, 1.9")
 
-        c1, c2, c3 = st.columns(3)
-        with c1:
-            if st.button("이전 단계"):
-                st.session_state.step = 1
-                st.rerun()
-        with c2:
-            if st.button("분석 실행", use_container_width=True):
-                if not pdf_file:
-                    st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
-                else:
-                    text = extract_pdf_text(pdf_file)
-                    if not str(text).strip():
+        if mode == "학생부 PDF 분석":
+            lpad, center, rpad = st.columns([1, 2, 1])
+            with center:
+                pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
+            g1, g2 = st.columns(2)
+            with g1:
+                grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4", key="grades_text_pdf")
+            with g2:
+                manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01, key="manual_grade_pdf")
+
+            if grades_text.strip():
+                try:
+                    vals = [float(x.strip()) for x in grades_text.split(",") if x.strip()]
+                    if vals:
+                        calc_grade = round(sum(vals) / len(vals), 2)
+                        st.caption(f"자동 계산 내신 평균: {calc_grade}")
+                except Exception:
+                    st.warning("내신 등급 형식이 올바르지 않습니다. 예: 2.1, 2.3, 1.9")
+
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("PDF 분석 실행", use_container_width=True):
+                    if not pdf_file:
                         st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
                     else:
-                        level, detail, summary, evidence = analyze_holistic_5level(text)
-                        excel_points = extract_grade_points_from_excel(excel_file)
-                        pdf_points = extract_grade_points_from_pdf_text(text)
-
-                        if excel_points:
-                            grade_score = round(sum(excel_points) / len(excel_points), 2)
-                            grade_source = f"엑셀 계산({len(excel_points)}개)"
-                        elif calc_grade is not None:
-                            grade_score = calc_grade
-                            grade_source = calc_source or "수기 입력 계산"
-                        elif pdf_points:
-                            grade_score = round(sum(pdf_points) / len(pdf_points), 2)
-                            grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
+                        text = extract_pdf_text(pdf_file)
+                        if not str(text).strip():
+                            st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
                         else:
-                            grade_score = float(manual_grade)
-                            grade_source = "직접 입력"
+                            level, detail, summary, evidence = analyze_holistic_5level(text)
+                            pdf_points = extract_grade_points_from_pdf_text(text)
+                            if calc_grade is not None:
+                                grade_score = calc_grade
+                                grade_source = "수기 입력 계산"
+                            elif pdf_points:
+                                grade_score = round(sum(pdf_points) / len(pdf_points), 2)
+                                grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
+                            else:
+                                grade_score = float(manual_grade)
+                                grade_source = "직접 입력"
+                            grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+                            st.session_state.holistic = {
+                                "pdf_summary": summary,
+                                "holistic_level": level,
+                                "holistic_detail": detail,
+                                "holistic_evidence": evidence,
+                                "holistic_score": sum(detail.values()) / len(detail),
+                                "student_grade_score": grade_score_9,
+                                "student_grade_source": f"{grade_source} | {grade_policy}",
+                                "student_grade_raw": grade_score,
+                            }
+                            st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
+            with c2:
+                if st.button("분석 생략 후 3단계 이동", use_container_width=True):
+                    base_grade = calc_grade if calc_grade is not None else float(manual_grade)
+                    grade_score_9, grade_policy = convert_grade_to_9_scale(base_grade, current_grade_label)
+                    st.session_state.holistic = {
+                        "pdf_summary": "학생부 분석 생략",
+                        "holistic_level": 0,
+                        "holistic_detail": {
+                            "학업역량": 0,
+                            "전공적합성": 0,
+                            "자기주도성": 0,
+                            "공동체역량": 0,
+                            "발전가능성": 0,
+                        },
+                        "holistic_evidence": {},
+                        "holistic_score": 0.0,
+                        "student_grade_score": grade_score_9,
+                        "student_grade_source": f"분석 생략 | {grade_policy}",
+                        "student_grade_raw": base_grade,
+                    }
+                    st.session_state.step = 3
+                    st.rerun()
 
-                        grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+        else:
+            lpad, center, rpad = st.columns([1, 2, 1])
+            with center:
+                excel_file = st.file_uploader("내신 계산 엑셀 업로드(xlsx)", type=["xlsx"], key="grade_xlsx_step2")
 
+            c1, c2 = st.columns(2)
+            with c1:
+                if st.button("엑셀 내신 계산", use_container_width=True):
+                    points = extract_grade_points_from_excel(excel_file)
+                    if not points:
+                        st.error("엑셀에서 등급 데이터를 찾지 못했습니다. 파일 형식을 확인해 주세요.")
+                    else:
+                        raw_grade = round(sum(points) / len(points), 2)
+                        grade_score_9, grade_policy = convert_grade_to_9_scale(raw_grade, current_grade_label)
                         st.session_state.holistic = {
-                            "pdf_summary": summary,
-                            "holistic_level": level,
-                            "holistic_detail": detail,
-                            "holistic_evidence": evidence,
-                            "holistic_score": sum(detail.values()) / len(detail),
-                            "student_grade_score": grade_score_9,
-                            "student_grade_source": f"{grade_source} | {grade_policy}",
-                            "student_grade_raw": grade_score,
-                        }
-                        st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
-        with c3:
-            if st.button("다음 단계", use_container_width=True):
-                if not st.session_state.holistic:
-                    if pdf_file:
-                        grade_score = calc_grade if calc_grade is not None else float(manual_grade)
-                        grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
-                        st.session_state.holistic = {
-                            "pdf_summary": "PDF 텍스트 추출 불가로 학생부 분석을 생략하고 3단계로 이동합니다.",
+                            "pdf_summary": "엑셀 내신 계산으로 진행",
                             "holistic_level": 0,
                             "holistic_detail": {
                                 "학업역량": 0,
@@ -996,14 +1023,27 @@ def main() -> None:
                             "holistic_evidence": {},
                             "holistic_score": 0.0,
                             "student_grade_score": grade_score_9,
-                            "student_grade_source": f"분석 생략 | {grade_policy}",
-                            "student_grade_raw": grade_score,
+                            "student_grade_source": f"엑셀 계산({len(points)}개) | {grade_policy}",
+                            "student_grade_raw": raw_grade,
                         }
-                        st.warning("학생부 분석이 불가하여 분석을 생략하고 3단계로 이동합니다.")
+                        st.success("엑셀 내신 계산이 완료되었습니다.")
+            with c2:
+                if st.button("3단계 이동", use_container_width=True):
+                    if not st.session_state.holistic:
+                        st.warning("먼저 엑셀 내신 계산을 실행해 주세요.")
+                    else:
                         st.session_state.step = 3
                         st.rerun()
-                    else:
-                        st.warning("먼저 학생부 PDF를 업로드하거나 분석 실행을 눌러 주세요.")
+
+        cnav1, cnav2 = st.columns(2)
+        with cnav1:
+            if st.button("이전 단계"):
+                st.session_state.step = 1
+                st.rerun()
+        with cnav2:
+            if st.button("다음 단계", use_container_width=True):
+                if not st.session_state.holistic:
+                    st.warning("2단계 작업(분석 또는 내신 계산)을 먼저 실행해 주세요.")
                 else:
                     st.session_state.step = 3
                     st.rerun()
