@@ -764,7 +764,11 @@ def _choice_input_block(susi_df: pd.DataFrame, no: int) -> Tuple[str, str, str, 
         uni = st.selectbox(f"대학교 {no}", ["직접입력"] + uni_options, key=f"uni_{no}")
         uni_text = st.text_input(f"대학교 직접입력 {no}", key=f"uni_txt_{no}") if uni == "직접입력" else uni
 
-    filtered_uni = susi_df[susi_df["university"] == uni_text] if uni_text else susi_df
+    if uni_text:
+        uni_key = _univ_key(uni_text)
+        filtered_uni = susi_df[susi_df["university"].apply(_univ_key) == uni_key]
+    else:
+        filtered_uni = susi_df
     dept_options = sorted(filtered_uni["department"].dropna().unique().tolist()) or [""]
 
     with b:
@@ -936,37 +940,43 @@ def main() -> None:
                 st.rerun()
         with c2:
             if st.button("분석 실행", use_container_width=True):
-                text = extract_pdf_text(pdf_file) if pdf_file else ""
-                level, detail, summary, evidence = analyze_holistic_5level(text)
-                excel_points = extract_grade_points_from_excel(excel_file)
-                pdf_points = extract_grade_points_from_pdf_text(text)
-
-                if excel_points:
-                    grade_score = round(sum(excel_points) / len(excel_points), 2)
-                    grade_source = f"엑셀 계산({len(excel_points)}개)"
-                elif calc_grade is not None:
-                    grade_score = calc_grade
-                    grade_source = calc_source or "수기 입력 계산"
-                elif pdf_points:
-                    grade_score = round(sum(pdf_points) / len(pdf_points), 2)
-                    grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
+                if not pdf_file:
+                    st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
                 else:
-                    grade_score = float(manual_grade)
-                    grade_source = "직접 입력"
+                    text = extract_pdf_text(pdf_file)
+                    if not str(text).strip():
+                        st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
+                    else:
+                        level, detail, summary, evidence = analyze_holistic_5level(text)
+                        excel_points = extract_grade_points_from_excel(excel_file)
+                        pdf_points = extract_grade_points_from_pdf_text(text)
 
-                grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+                        if excel_points:
+                            grade_score = round(sum(excel_points) / len(excel_points), 2)
+                            grade_source = f"엑셀 계산({len(excel_points)}개)"
+                        elif calc_grade is not None:
+                            grade_score = calc_grade
+                            grade_source = calc_source or "수기 입력 계산"
+                        elif pdf_points:
+                            grade_score = round(sum(pdf_points) / len(pdf_points), 2)
+                            grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
+                        else:
+                            grade_score = float(manual_grade)
+                            grade_source = "직접 입력"
 
-                st.session_state.holistic = {
-                    "pdf_summary": summary,
-                    "holistic_level": level,
-                    "holistic_detail": detail,
-                    "holistic_evidence": evidence,
-                    "holistic_score": sum(detail.values()) / len(detail),
-                    "student_grade_score": grade_score_9,
-                    "student_grade_source": f"{grade_source} | {grade_policy}",
-                    "student_grade_raw": grade_score,
-                }
-                st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
+                        grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+
+                        st.session_state.holistic = {
+                            "pdf_summary": summary,
+                            "holistic_level": level,
+                            "holistic_detail": detail,
+                            "holistic_evidence": evidence,
+                            "holistic_score": sum(detail.values()) / len(detail),
+                            "student_grade_score": grade_score_9,
+                            "student_grade_source": f"{grade_source} | {grade_policy}",
+                            "student_grade_raw": grade_score,
+                        }
+                        st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
         with c3:
             if st.button("다음 단계", use_container_width=True):
                 if not st.session_state.holistic:
@@ -1005,16 +1015,15 @@ def main() -> None:
         st.subheader("3단계 - 희망대학 지원 (최대 6개)")
         supports: List[Tuple[str, str, str, str]] = []
 
-        with st.form("step3_form"):
-            for no in range(1, 7):
-                with st.expander(f"지원 {no}", expanded=(no <= 2)):
-                    supports.append(_choice_input_block(susi_df, no))
+        for no in range(1, 7):
+            with st.expander(f"지원 {no}", expanded=(no <= 2)):
+                supports.append(_choice_input_block(susi_df, no))
 
-            c1, c2 = st.columns(2)
-            with c1:
-                back = st.form_submit_button("이전 단계")
-            with c2:
-                nxt = st.form_submit_button("평가 후 보고서 보기", use_container_width=True)
+        c1, c2 = st.columns(2)
+        with c1:
+            back = st.button("이전 단계")
+        with c2:
+            nxt = st.button("평가 후 보고서 보기", use_container_width=True)
 
         if back:
             st.session_state.step = 2
