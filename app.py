@@ -596,10 +596,24 @@ def _basis_university(uni: str) -> str:
     return uni if uni in TOP15 else "경희대"
 
 
+def _support_summary(choices: List[SupportChoice]) -> Dict[str, int]:
+    out = {"상향 가능": 0, "적정": 0, "소신": 0, "안전": 0, "하향 권장": 0, "입결 데이터 없음": 0}
+    for c in choices:
+        out[c.diag_level] = out.get(c.diag_level, 0) + 1
+    return out
+
+
 def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_detail: Dict[str, int]) -> str:
+    summary_counts = _support_summary(choices)
     lines = [
-        "# 나의 입시 위치 진단 종합보고서",
+        "# 대치수프리마 입시 진단 종합보고서",
         f"- 생성시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        "",
+        "## 0) 종합 요약",
+        f"- 학생: {payload.get('student_name', '')} ({payload.get('grade', '')})",
+        f"- 학생부 종합단계: {payload.get('holistic_level', 0)}단계",
+        f"- 내신(판단용 9등급): {payload.get('student_grade_score', '')}",
+        f"- 상향 가능: {summary_counts.get('상향 가능', 0)}개 / 적정: {summary_counts.get('적정', 0)}개 / 소신: {summary_counts.get('소신', 0)}개 / 하향 권장: {summary_counts.get('하향 권장', 0)}개",
         "",
         "## 1) 사용자 정보",
         f"- 컨설턴트: {payload.get('consultant_name', '')}",
@@ -618,7 +632,6 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
     for k, v in holistic_detail.items():
         lines.append(f"- {k}: {v}점")
 
-    lines.extend(["", "## 3) 지원희망대학 평가 (최대 6개)"])
     evidence = payload.get("holistic_evidence", {})
     lines.append("")
     lines.append("## 2-1) 학생부 항목별 근거 내용")
@@ -645,20 +658,42 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
     lines.extend(
         [
             "",
-            "## 4) 적용 기준",
+            "## 3-1) 지원 전략 제안",
+            "- 상향 카드: 1~2개 이내로 제한",
+            "- 적정 카드: 2~3개 중심 구성",
+            "- 안정 카드: 1~2개 확보",
+            "- 입결 데이터 없음 항목은 학교별 추가 검증 후 최종 반영",
+        ]
+    )
+
+    lines.extend(
+        [
+            "",
+            "## 4) 적용 기준 및 주의사항",
             "- 대학 리스트: 2026 수시검색기 + 2027 업로드 병합",
             "- 충돌 규칙: 동일 조합(대학교/모집단위/전형유형/전형명) 충돌 시 2027 우선",
             "- 입결 판단: 2023~2025학년도 50%/70% 컷 기준",
             "- 학생부종합 평가기준: 서울 상위 15개 대학 기준, 미포함 대학은 경희대 기준 적용",
+            "- 본 보고서는 업로드 데이터 품질에 따라 결과가 달라질 수 있습니다.",
         ]
     )
     return "\n".join(lines)
 
 
 def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detail: Dict[str, int]) -> bytes:
+    summary_counts = _support_summary(choices)
     doc = Document()
-    doc.add_heading("나의 입시 위치 진단 종합보고서", level=1)
+    doc.add_heading("대치수프리마 입시 진단 종합보고서", level=1)
     doc.add_paragraph(f"생성시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+    doc.add_heading("0) 종합 요약", level=2)
+    doc.add_paragraph(f"- 학생: {payload.get('student_name', '')} ({payload.get('grade', '')})")
+    doc.add_paragraph(f"- 학생부 종합단계: {payload.get('holistic_level', 0)}단계")
+    doc.add_paragraph(f"- 내신(판단용 9등급): {payload.get('student_grade_score', '')}")
+    doc.add_paragraph(
+        f"- 상향 가능 {summary_counts.get('상향 가능', 0)}개 / 적정 {summary_counts.get('적정', 0)}개 / "
+        f"소신 {summary_counts.get('소신', 0)}개 / 하향 권장 {summary_counts.get('하향 권장', 0)}개"
+    )
 
     doc.add_heading("1) 사용자 정보", level=2)
     info_rows = [
@@ -714,9 +749,17 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
         row[6].text = c.diag_reason
         row[7].text = c.cutoff_basis
 
-    doc.add_heading("4) 적용 기준", level=2)
+    doc.add_heading("3-1) 지원 전략 제안", level=2)
+    doc.add_paragraph("- 상향 카드: 1~2개 이내로 제한")
+    doc.add_paragraph("- 적정 카드: 2~3개 중심 구성")
+    doc.add_paragraph("- 안정 카드: 1~2개 확보")
+    doc.add_paragraph("- 입결 데이터 없음 항목은 학교별 추가 검증 후 최종 반영")
+
+    doc.add_heading("4) 적용 기준 및 주의사항", level=2)
     doc.add_paragraph("- 대학 리스트: 2026 수시검색기 + 2027 업로드 병합 (충돌 시 2027 우선)")
     doc.add_paragraph("- 입결 판단: 2023~2025학년도 50%/70% 컷 기준")
+    doc.add_paragraph("- 학생부종합 평가기준: 서울 상위 15개 대학 기준, 미포함 대학은 경희대 기준 적용")
+    doc.add_paragraph("- 본 보고서는 업로드 데이터 품질에 따라 결과가 달라질 수 있습니다.")
 
     buf = io.BytesIO()
     doc.save(buf)
@@ -1207,10 +1250,11 @@ def main() -> None:
 
         docx_bytes = build_docx_bytes(payload, choices, holistic_detail)
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        student_name = str(payload.get("student_name", "학생")).strip() or "학생"
         st.download_button(
             "DOC 보고서 다운로드",
             data=docx_bytes,
-            file_name=f"admission_report_{stamp}.docx",
+            file_name=f"종합보고서_{student_name}_{stamp}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
