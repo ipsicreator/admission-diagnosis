@@ -22,6 +22,8 @@ SUSI_2026 = DATA_DIR / "susi_explorer.csv"
 SUSI_2027 = DATA_DIR / "susi_explorer_2027.csv"
 CUTOFFS = DATA_DIR / "admission_cutoffs.csv"
 CRITERIA = DATA_DIR / "holistic_criteria.csv"
+LOCAL_GRADE_XLSX_2015 = Path(r"C:\Users\chris\Desktop\수시\내신성적계산기_2015과정.xlsx")
+LOCAL_GRADE_XLSX_2022 = Path(r"C:\Users\chris\Desktop\수시\내신성적계산기_2022과정.xlsx")
 
 TOP15 = [
     "서울대",
@@ -375,11 +377,53 @@ def load_data(dataset_mode: str = "merge") -> Tuple[pd.DataFrame, pd.DataFrame, 
     return merged, cutoff, criteria
 
 
-def extract_pdf_text(uploaded_file) -> str:
+def _extract_pdf_text_basic(uploaded_file) -> str:
     if not uploaded_file:
         return ""
     reader = PdfReader(io.BytesIO(uploaded_file.getvalue()))
     return "\n".join((page.extract_text() or "") for page in reader.pages)
+
+
+def _extract_pdf_text_ocr(uploaded_file, max_pages: int = 20) -> str:
+    if not uploaded_file:
+        return ""
+    try:
+        import fitz  # PyMuPDF
+        import numpy as np
+        from rapidocr_onnxruntime import RapidOCR
+    except Exception:
+        return ""
+
+    ocr = RapidOCR()
+    text_lines: List[str] = []
+    pdf_bytes = uploaded_file.getvalue()
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        for idx, page in enumerate(doc):
+            if idx >= max_pages:
+                break
+            pix = page.get_pixmap(matrix=fitz.Matrix(2.0, 2.0), alpha=False)
+            arr = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, pix.n)
+            result, _ = ocr(arr)
+            if result:
+                for item in result:
+                    # item: [box, text, score]
+                    if len(item) >= 2 and str(item[1]).strip():
+                        text_lines.append(str(item[1]).strip())
+    finally:
+        doc.close()
+    return "\n".join(text_lines)
+
+
+def extract_pdf_text(uploaded_file) -> Tuple[str, str]:
+    # returns (text, source)
+    basic = _extract_pdf_text_basic(uploaded_file)
+    if len(str(basic).strip()) >= 40:
+        return basic, "pdf-text"
+    ocr_text = _extract_pdf_text_ocr(uploaded_file)
+    if len(str(ocr_text).strip()) >= 20:
+        return ocr_text, "ocr"
+    return "", "none"
 
 
 def extract_grade_points_from_pdf_text(pdf_text: str) -> List[float]:
@@ -460,6 +504,14 @@ def convert_grade_to_9_scale(grade_value: float, student_grade_label: str) -> Tu
         converted = max(1.0, min(9.0, converted))
         return round(converted, 2), "고1~2는 5등급을 9등급으로 환산 적용"
     return round(max(1.0, min(9.0, g)), 2), "고3/N수는 9등급 기준 적용"
+
+
+def expected_curriculum_by_grade(student_grade_label: str) -> Tuple[str, Path, str]:
+    # 현 고3 및 모든 졸업생(N수 포함) -> 2015과정
+    # 고1, 고2 -> 2022과정
+    if student_grade_label in ["고3", "N수이상"]:
+        return "2015과정", LOCAL_GRADE_XLSX_2015, "2015"
+    return "2022과정", LOCAL_GRADE_XLSX_2022, "2022"
 
 
 def analyze_holistic_5level(pdf_text: str) -> Tuple[int, Dict[str, int], str, Dict[str, List[str]]]:
@@ -912,6 +964,8 @@ def main() -> None:
             horizontal=True,
         )
         current_grade_label = st.session_state.profile.get("grade", "")
+        curriculum_label, curriculum_file, curriculum_token = expected_curriculum_by_grade(current_grade_label)
+        st.caption(f"현재 입력 학년: {current_grade_label} | 적용 내신 과정: {curriculum_label}")
         if current_grade_label in ["고1", "고2"]:
             st.info("내신 계산 안내: 고1~2학년은 5등급제를 9등급제로 환산하여 판단합니다.")
         else:
@@ -946,7 +1000,7 @@ def main() -> None:
                     if not pdf_file:
                         st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
                     else:
-                        text = extract_pdf_text(pdf_file)
+                        text, text_source = extract_pdf_text(pdf_file)
                         if not str(text).strip():
                             st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
                         else:
@@ -970,6 +1024,7 @@ def main() -> None:
                                 "holistic_score": sum(detail.values()) / len(detail),
                                 "student_grade_score": grade_score_9,
                                 "student_grade_source": f"{grade_source} | {grade_policy}",
+                                "pdf_text_source": text_source,
                                 "student_grade_raw": grade_score,
                             }
                             st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
@@ -999,34 +1054,51 @@ def main() -> None:
         else:
             lpad, center, rpad = st.columns([1, 2, 1])
             with center:
-                excel_file = st.file_uploader("내신 계산 엑셀 업로드(xlsx)", type=["xlsx"], key="grade_xlsx_step2")
+                st.markdown(f"**엑셀 내신 계산 화면 ({curriculum_label})**")
+                if curriculum_file.exists():
+                    st.download_button(
+                        f"{curriculum_label} 템플릿 다운로드",
+                        data=curriculum_file.read_bytes(),
+                        file_name=curriculum_file.name,
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    )
+                excel_file = st.file_uploader(
+                    f"내신 계산 엑셀 업로드(xlsx) - {curriculum_label}",
+                    type=["xlsx"],
+                    key="grade_xlsx_step2",
+                )
+                if excel_file and (curriculum_token not in excel_file.name):
+                    st.warning(f"현재 학년({current_grade_label})은 {curriculum_label} 사용 대상입니다. 업로드 파일을 다시 확인해 주세요.")
 
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("엑셀 내신 계산", use_container_width=True):
-                    points = extract_grade_points_from_excel(excel_file)
-                    if not points:
-                        st.error("엑셀에서 등급 데이터를 찾지 못했습니다. 파일 형식을 확인해 주세요.")
+                    if not excel_file:
+                        st.warning(f"{curriculum_label} 엑셀 파일을 먼저 업로드해 주세요.")
                     else:
-                        raw_grade = round(sum(points) / len(points), 2)
-                        grade_score_9, grade_policy = convert_grade_to_9_scale(raw_grade, current_grade_label)
-                        st.session_state.holistic = {
-                            "pdf_summary": "엑셀 내신 계산으로 진행",
-                            "holistic_level": 0,
-                            "holistic_detail": {
-                                "학업역량": 0,
-                                "전공적합성": 0,
-                                "자기주도성": 0,
-                                "공동체역량": 0,
-                                "발전가능성": 0,
-                            },
-                            "holistic_evidence": {},
-                            "holistic_score": 0.0,
-                            "student_grade_score": grade_score_9,
-                            "student_grade_source": f"엑셀 계산({len(points)}개) | {grade_policy}",
-                            "student_grade_raw": raw_grade,
-                        }
-                        st.success("엑셀 내신 계산이 완료되었습니다.")
+                        points = extract_grade_points_from_excel(excel_file)
+                        if not points:
+                            st.error("엑셀에서 등급 데이터를 찾지 못했습니다. 파일 형식을 확인해 주세요.")
+                        else:
+                            raw_grade = round(sum(points) / len(points), 2)
+                            grade_score_9, grade_policy = convert_grade_to_9_scale(raw_grade, current_grade_label)
+                            st.session_state.holistic = {
+                                "pdf_summary": "엑셀 내신 계산으로 진행",
+                                "holistic_level": 0,
+                                "holistic_detail": {
+                                    "학업역량": 0,
+                                    "전공적합성": 0,
+                                    "자기주도성": 0,
+                                    "공동체역량": 0,
+                                    "발전가능성": 0,
+                                },
+                                "holistic_evidence": {},
+                                "holistic_score": 0.0,
+                                "student_grade_score": grade_score_9,
+                                "student_grade_source": f"엑셀 계산({len(points)}개) | {grade_policy}",
+                                "student_grade_raw": raw_grade,
+                            }
+                            st.success("엑셀 내신 계산이 완료되었습니다.")
             with c2:
                 if st.button("3단계 이동", use_container_width=True):
                     if not st.session_state.holistic:
@@ -1061,6 +1133,10 @@ def main() -> None:
             if st.session_state.holistic.get("student_grade_raw") is not None:
                 st.caption(f"원입력 내신: {st.session_state.holistic.get('student_grade_raw', 0):.2f}")
             st.caption(f"내신 산출 기준: {st.session_state.holistic.get('student_grade_source', '-')}")
+            if st.session_state.holistic.get("pdf_text_source") == "ocr":
+                st.caption("PDF 추출 방식: OCR 자동분석 사용")
+            elif st.session_state.holistic.get("pdf_text_source") == "pdf-text":
+                st.caption("PDF 추출 방식: 텍스트 레이어 직접 추출")
             for k, v in detail.items():
                 st.write(f"- {k}: {v}점")
                 st.progress(min(max(int(v), 0), 100))
