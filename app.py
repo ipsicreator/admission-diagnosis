@@ -752,7 +752,9 @@ def main() -> None:
                 email = st.text_input("메일주소(필수) *")
                 parent_phone = st.text_input("학부모 연락처 *")
 
-            ok = st.form_submit_button("다음 단계")
+            _, btn_col = st.columns([5, 1])
+            with btn_col:
+                ok = st.form_submit_button("다음 단계", use_container_width=True)
 
         if ok:
             required = {
@@ -782,7 +784,9 @@ def main() -> None:
     # Step 2
     elif st.session_state.step == 2:
         st.subheader("2단계 - 학생부 분석")
-        pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
+        lpad, center, rpad = st.columns([1, 2, 1])
+        with center:
+            pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
         g1, g2 = st.columns(2)
         with g1:
             grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4")
@@ -816,6 +820,7 @@ def main() -> None:
                     "holistic_score": sum(detail.values()) / len(detail),
                     "student_grade_score": grade_score,
                 }
+                st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
         with c3:
             if st.button("다음 단계", use_container_width=True):
                 if not st.session_state.holistic:
@@ -825,6 +830,7 @@ def main() -> None:
                     st.rerun()
 
         if st.session_state.holistic:
+            st.markdown("### 분석 결과")
             st.info(st.session_state.holistic.get("pdf_summary", ""))
             detail = st.session_state.holistic.get("holistic_detail", {})
             m1, m2 = st.columns(2)
@@ -836,6 +842,9 @@ def main() -> None:
             for k, v in detail.items():
                 st.write(f"- {k}: {v}점")
                 st.progress(min(max(int(v), 0), 100))
+        else:
+            st.markdown("### 분석 결과")
+            st.info("학생부 PDF를 업로드하고 '분석 실행'을 누르면 이 영역에 결과가 표시됩니다.")
 
     # Step 3
     elif st.session_state.step == 3:
