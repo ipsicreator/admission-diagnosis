@@ -57,6 +57,46 @@ class SupportChoice:
     cutoff70: float
 
 
+def inject_css() -> None:
+    st.markdown(
+        """
+        <style>
+        .service-title {
+          text-align: center;
+          font-size: 33px; /* 25pt */
+          font-weight: 800;
+          margin-bottom: 2px;
+        }
+        .service-subtitle {
+          text-align: center;
+          font-size: 20px; /* 15pt */
+          font-weight: 600;
+          margin-bottom: 14px;
+          opacity: 0.95;
+        }
+        .step-box {
+          text-align: center;
+          font-size: 31px;
+          font-weight: 700;
+          padding: 12px 4px;
+          border-radius: 10px;
+        }
+        .step-active {
+          background: rgba(30, 91, 255, 0.18);
+          border: 1px solid rgba(84, 139, 255, 0.55);
+        }
+        .footer-note {
+          text-align: center;
+          margin-top: 22px;
+          opacity: 0.85;
+          font-size: 14px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -155,6 +195,35 @@ def _clean_text(s: pd.Series) -> pd.Series:
     return s.fillna("").astype(str).str.strip()
 
 
+def _univ_key(name: str) -> str:
+    s = str(name or "").strip().replace(" ", "")
+    for suffix in ["대학교", "대학", "대"]:
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+    return s
+
+
+def _canonical_university_map(base_2026: pd.DataFrame) -> Dict[str, str]:
+    names = sorted(base_2026["university"].dropna().astype(str).str.strip().unique().tolist())
+    key_map: Dict[str, str] = {}
+    for n in names:
+        k = _univ_key(n)
+        if not k:
+            continue
+        if k not in key_map:
+            key_map[k] = n
+        else:
+            prev = key_map[k]
+            # 2026 명칭 중 더 공식형(길이 긴 값) 우선
+            key_map[k] = n if len(n) > len(prev) else prev
+    return key_map
+
+
+def _remove_excluded_type(admission_type: str, track_name: str) -> bool:
+    joined = (str(admission_type) + " " + str(track_name)).replace(" ", "")
+    return "교과기회" in joined
+
+
 def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if not SUSI_2026.exists():
         pd.DataFrame(columns=["year", "university", "department", "admission_type", "track_name"]).to_csv(
@@ -180,15 +249,23 @@ def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         s26[col] = _clean_text(s26[col])
         s27[col] = _clean_text(s27[col])
 
+    # 2027 대학명은 2026 기준 명칭으로 통일 (예: 강남대 -> 강남대학교)
+    canon_map = _canonical_university_map(s26)
+    s27["university"] = s27["university"].apply(
+        lambda x: canon_map.get(_univ_key(x), str(x).strip())
+    )
+
     merged = pd.concat([s26, s27], ignore_index=True)
     key = ["university", "department", "admission_type", "track_name"]
     merged = merged.sort_values("year")
     merged = merged.drop_duplicates(subset=key, keep="last")  # 충돌 시 2027 우선
     merged = merged[merged["university"] != ""].copy()
+    merged = merged[~merged.apply(lambda r: _remove_excluded_type(r["admission_type"], r["track_name"]), axis=1)].copy()
 
     cutoff = _normalize_columns(load_csv(CUTOFFS), "cutoff")
     for col in ["university", "department", "admission_type", "track_name"]:
         cutoff[col] = _clean_text(cutoff[col])
+    cutoff["university"] = cutoff["university"].apply(lambda x: canon_map.get(_univ_key(x), str(x).strip()))
     cutoff["year"] = _to_int_year(cutoff["year"])
     cutoff["percentile_type"] = pd.to_numeric(cutoff["percentile_type"], errors="coerce")
     cutoff["cutoff_score"] = pd.to_numeric(cutoff["cutoff_score"], errors="coerce")
@@ -432,8 +509,27 @@ def _step_header(current_step: int) -> None:
     cols = st.columns(4)
     for i, (col, label) in enumerate(zip(cols, labels), start=1):
         with col:
-            t = f"**{label}**" if i == current_step else label
-            st.markdown(t)
+            cls = "step-box step-active" if i == current_step else "step-box"
+            st.markdown(f"<div class='{cls}'>{label}</div>", unsafe_allow_html=True)
+
+
+def _consultant_panel() -> str:
+    if "consultant_name_fixed" not in st.session_state:
+        st.session_state.consultant_name_fixed = ""
+
+    if st.session_state.consultant_name_fixed:
+        st.text_input("컨설턴트 이름", value=st.session_state.consultant_name_fixed, disabled=True, key="consultant_fixed_view")
+        return st.session_state.consultant_name_fixed
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        name = st.text_input("컨설턴트 이름", key="consultant_name_once")
+    with c2:
+        save = st.button("저장", use_container_width=True)
+    if save and name.strip():
+        st.session_state.consultant_name_fixed = name.strip()
+        st.rerun()
+    return name.strip()
 
 
 def _choice_input_block(susi_df: pd.DataFrame, no: int) -> Tuple[str, str, str, str]:
@@ -468,8 +564,10 @@ def _choice_input_block(susi_df: pd.DataFrame, no: int) -> Tuple[str, str, str, 
 def main() -> None:
     st.set_page_config(page_title="나의 입시 위치 진단 서비스", layout="wide")
     init_db()
+    inject_css()
 
-    st.title("나의 입시 위치 진단 서비스")
+    st.markdown("<div class='service-title'>나의 입시 위치 진단서비스</div>", unsafe_allow_html=True)
+    st.markdown("<div class='service-subtitle'>by 대치수프리마</div>", unsafe_allow_html=True)
     st.caption("기준: 2026+2027 수시 병합(충돌 시 2027 우선), 2023~2025 50/70컷")
 
     # 데이터 업로드 관리
@@ -516,7 +614,11 @@ def main() -> None:
     if "saved" not in st.session_state:
         st.session_state.saved = False
 
-    _step_header(st.session_state.step)
+    head_left, head_right = st.columns([6, 2])
+    with head_left:
+        _step_header(st.session_state.step)
+    with head_right:
+        consultant_global = _consultant_panel()
     st.markdown("---")
 
     # Step 1
@@ -525,7 +627,6 @@ def main() -> None:
         with st.form("step1_form"):
             c1, c2 = st.columns(2)
             with c1:
-                consultant_name = st.text_input("컨설턴트 이름 *")
                 student_name = st.text_input("학생명 *")
                 school_name = st.text_input("학교명 *")
                 grade = st.selectbox("학년 *", GRADE_OPTIONS)
@@ -539,7 +640,7 @@ def main() -> None:
 
         if ok:
             required = {
-                "컨설턴트 이름": consultant_name,
+                "컨설턴트 이름": consultant_global,
                 "학생명": student_name,
                 "학교명": school_name,
                 "학생 전화번호": student_phone,
@@ -551,7 +652,7 @@ def main() -> None:
                 st.error("필수값 누락: " + ", ".join(missing))
             else:
                 st.session_state.profile = {
-                    "consultant_name": consultant_name.strip(),
+                    "consultant_name": consultant_global.strip(),
                     "student_name": student_name.strip(),
                     "school_name": school_name.strip(),
                     "grade": grade.strip(),
@@ -567,13 +668,13 @@ def main() -> None:
     elif st.session_state.step == 2:
         st.subheader("2단계 - 학생부 분석")
         pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
-        c1, c2 = st.columns(2)
+        c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("이전 단계"):
                 st.session_state.step = 1
                 st.rerun()
         with c2:
-            if st.button("분석 후 다음 단계", use_container_width=True):
+            if st.button("분석 실행", use_container_width=True):
                 text = extract_pdf_text(pdf_file) if pdf_file else ""
                 level, detail, summary = analyze_holistic_5level(text)
                 st.session_state.holistic = {
@@ -582,13 +683,25 @@ def main() -> None:
                     "holistic_detail": detail,
                     "holistic_score": sum(detail.values()) / len(detail),
                 }
-                st.session_state.step = 3
-                st.rerun()
+        with c3:
+            if st.button("다음 단계", use_container_width=True):
+                if not st.session_state.holistic:
+                    st.warning("먼저 분석 실행을 눌러 주세요.")
+                else:
+                    st.session_state.step = 3
+                    st.rerun()
 
         if st.session_state.holistic:
             st.info(st.session_state.holistic.get("pdf_summary", ""))
-            for k, v in st.session_state.holistic.get("holistic_detail", {}).items():
+            detail = st.session_state.holistic.get("holistic_detail", {})
+            m1, m2 = st.columns(2)
+            with m1:
+                st.metric("종합 단계", f"{st.session_state.holistic.get('holistic_level', 0)}단계")
+            with m2:
+                st.metric("평균 점수", f"{st.session_state.holistic.get('holistic_score', 0):.1f}")
+            for k, v in detail.items():
                 st.write(f"- {k}: {v}점")
+                st.progress(min(max(int(v), 0), 100))
 
     # Step 3
     elif st.session_state.step == 3:
@@ -670,6 +783,8 @@ def main() -> None:
                 st.rerun()
 
         st.info(f"진단 결과가 DB에 저장되었습니다: {DB_PATH}")
+
+    st.markdown("<div class='footer-note'>자료: 대학어디가  운영: 대치 수프리마</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
