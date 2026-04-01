@@ -603,6 +603,33 @@ def _support_summary(choices: List[SupportChoice]) -> Dict[str, int]:
     return out
 
 
+def _score_band_comment(score: float) -> str:
+    if score >= 85:
+        return "우수"
+    if score >= 70:
+        return "양호"
+    if score >= 55:
+        return "보통"
+    if score >= 40:
+        return "보완 필요"
+    return "집중 보완 필요"
+
+
+def _student_record_summary(detail: Dict[str, int]) -> Tuple[str, List[str], List[str]]:
+    if not detail:
+        return "학생부 분석 데이터가 부족합니다.", [], ["학생부 원문 텍스트 추출(OCR 포함) 품질 점검 필요"]
+    ordered = sorted(detail.items(), key=lambda x: x[1], reverse=True)
+    strengths = [f"{k}({v}점)" for k, v in ordered[:2]]
+    gaps = [f"{k}({v}점)" for k, v in sorted(detail.items(), key=lambda x: x[1])[:2]]
+    avg = sum(detail.values()) / len(detail)
+    total_comment = f"학생부 5개 항목 평균은 {avg:.1f}점으로 '{_score_band_comment(avg)}' 수준입니다."
+    actions = [
+        "강점 항목은 활동 결과물/근거 문장을 유지해 일관성을 강화합니다.",
+        "보완 항목은 학기별 목표-실행-피드백 구조로 기록을 구체화합니다.",
+    ]
+    return total_comment, strengths, gaps + actions
+
+
 def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_detail: Dict[str, int]) -> str:
     summary_counts = _support_summary(choices)
     lines = [
@@ -631,6 +658,7 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
     ]
     for k, v in holistic_detail.items():
         lines.append(f"- {k}: {v}점")
+        lines.append(f"  - 해석: {_score_band_comment(v)}")
 
     evidence = payload.get("holistic_evidence", {})
     lines.append("")
@@ -643,6 +671,11 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
                 lines.append(f"  - {s}")
         else:
             lines.append("  - 근거 문장 추출 없음")
+
+    total_comment, strengths, improvement = _student_record_summary(holistic_detail)
+    lines.extend(["", "## 2-2) 학생부 분석 총평", f"- {total_comment}", "- 강점 요약: " + (", ".join(strengths) if strengths else "없음")])
+    for item in improvement:
+        lines.append(f"- 보완/실행: {item}")
 
     lines.extend(["", "## 3) 지원희망대학 평가 (최대 6개)"])
     for c in choices:
@@ -714,6 +747,7 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
     doc.add_paragraph(f"- 종합단계: {payload.get('holistic_level', 0)}단계")
     for k, v in holistic_detail.items():
         doc.add_paragraph(f"- {k}: {v}점")
+        doc.add_paragraph(f"  · 해석: {_score_band_comment(v)}")
 
     doc.add_heading("2-1) 학생부 항목별 근거 내용", level=2)
     evidence = payload.get("holistic_evidence", {})
@@ -725,6 +759,13 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
                 doc.add_paragraph(f"  · {s}")
         else:
             doc.add_paragraph("  · 근거 문장 추출 없음")
+
+    total_comment, strengths, improvement = _student_record_summary(holistic_detail)
+    doc.add_heading("2-2) 학생부 분석 총평", level=2)
+    doc.add_paragraph(f"- {total_comment}")
+    doc.add_paragraph("- 강점 요약: " + (", ".join(strengths) if strengths else "없음"))
+    for item in improvement:
+        doc.add_paragraph(f"- 보완/실행: {item}")
 
     doc.add_heading("3) 지원희망대학 평가", level=2)
     table = doc.add_table(rows=1, cols=8)
