@@ -4,7 +4,7 @@ import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 import streamlit as st
@@ -55,6 +55,7 @@ class SupportChoice:
     diag_reason: str
     cutoff50: float
     cutoff70: float
+    cutoff_basis: str
 
 
 def inject_css() -> None:
@@ -224,7 +225,93 @@ def _remove_excluded_type(admission_type: str, track_name: str) -> bool:
     return "교과기회" in joined
 
 
-def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def _extract_year_from_col(col_name: str) -> Optional[int]:
+    text = str(col_name)
+    for y in [2023, 2024, 2025]:
+        if str(y) in text:
+            return y
+    return None
+
+
+def _detect_percentile_from_text(text: str) -> Optional[int]:
+    t = str(text).replace(" ", "")
+    if "50%" in t or "50컷" in t:
+        return 50
+    if "70%" in t or "70컷" in t:
+        return 70
+    return None
+
+
+def _normalize_cutoff_flexible(df: pd.DataFrame) -> pd.DataFrame:
+    # long format
+    if {"year", "university", "department", "admission_type", "track_name", "percentile_type", "cutoff_score"}.issubset(set(df.columns)):
+        out = df.copy()
+        out["year"] = _to_int_year(out["year"])
+        out["percentile_type"] = pd.to_numeric(out["percentile_type"], errors="coerce")
+        out["cutoff_score"] = pd.to_numeric(out["cutoff_score"], errors="coerce")
+        for c in ["university", "department", "admission_type", "track_name"]:
+            out[c] = _clean_text(out[c])
+        return out[
+            ["year", "university", "department", "admission_type", "track_name", "percentile_type", "cutoff_score"]
+        ].copy()
+
+    # flexible wide format (e.g. 2025학년도 입결(등급), 2024..., 2023...)
+    rename_candidates = {
+        "university": ["university", "대학교", "대학명", "대학"],
+        "department": ["department", "모집단위", "학과", "학부"],
+        "admission_type": ["admission_type", "전형유형", "전형유형명"],
+        "track_name": ["track_name", "전형명"],
+        "basis": ["기준", "2025학년도 기준", "컷기준", "구분"],
+    }
+    col_map: Dict[str, str] = {}
+    cols = set(df.columns)
+    for target, aliases in rename_candidates.items():
+        for a in aliases:
+            if a in cols:
+                col_map[target] = a
+                break
+
+    year_score_cols = [c for c in df.columns if _extract_year_from_col(c) in {2023, 2024, 2025}]
+    if not year_score_cols:
+        return pd.DataFrame(
+            columns=["year", "university", "department", "admission_type", "track_name", "percentile_type", "cutoff_score"]
+        )
+
+    rows: List[Dict] = []
+    for _, r in df.iterrows():
+        uni = str(r.get(col_map.get("university", ""), "")).strip()
+        dept = str(r.get(col_map.get("department", ""), "")).strip()
+        atype = str(r.get(col_map.get("admission_type", ""), "")).strip()
+        track = str(r.get(col_map.get("track_name", ""), "")).strip()
+        basis_text = str(r.get(col_map.get("basis", ""), ""))
+        ptype = _detect_percentile_from_text(basis_text)
+        for sc in year_score_cols:
+            year = _extract_year_from_col(sc)
+            score = pd.to_numeric(r.get(sc), errors="coerce")
+            if pd.isna(score) or year is None:
+                continue
+            rows.append(
+                {
+                    "year": int(year),
+                    "university": uni,
+                    "department": dept,
+                    "admission_type": atype,
+                    "track_name": track,
+                    "percentile_type": ptype,
+                    "cutoff_score": float(score),
+                }
+            )
+    out = pd.DataFrame(rows)
+    if out.empty:
+        return pd.DataFrame(
+            columns=["year", "university", "department", "admission_type", "track_name", "percentile_type", "cutoff_score"]
+        )
+    for c in ["university", "department", "admission_type", "track_name"]:
+        out[c] = _clean_text(out[c])
+    return out
+
+
+def load_data(dataset_mode: str = "merge") -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
     if not SUSI_2026.exists():
         pd.DataFrame(columns=["year", "university", "department", "admission_type", "track_name"]).to_csv(
             SUSI_2026, index=False, encoding="utf-8-sig"
@@ -255,20 +342,20 @@ def load_data() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
         lambda x: canon_map.get(_univ_key(x), str(x).strip())
     )
 
-    merged = pd.concat([s26, s27], ignore_index=True)
-    key = ["university", "department", "admission_type", "track_name"]
-    merged = merged.sort_values("year")
-    merged = merged.drop_duplicates(subset=key, keep="last")  # 충돌 시 2027 우선
+    if dataset_mode == "2027":
+        merged = s27.copy()
+    else:
+        merged = pd.concat([s26, s27], ignore_index=True)
+        key = ["university", "department", "admission_type", "track_name"]
+        merged = merged.sort_values("year")
+        merged = merged.drop_duplicates(subset=key, keep="last")  # 충돌 시 2027 우선
     merged = merged[merged["university"] != ""].copy()
     merged = merged[~merged.apply(lambda r: _remove_excluded_type(r["admission_type"], r["track_name"]), axis=1)].copy()
 
-    cutoff = _normalize_columns(load_csv(CUTOFFS), "cutoff")
+    cutoff = _normalize_cutoff_flexible(load_csv(CUTOFFS))
     for col in ["university", "department", "admission_type", "track_name"]:
-        cutoff[col] = _clean_text(cutoff[col])
+        cutoff[col] = _clean_text(cutoff[col]) if col in cutoff.columns else ""
     cutoff["university"] = cutoff["university"].apply(lambda x: canon_map.get(_univ_key(x), str(x).strip()))
-    cutoff["year"] = _to_int_year(cutoff["year"])
-    cutoff["percentile_type"] = pd.to_numeric(cutoff["percentile_type"], errors="coerce")
-    cutoff["cutoff_score"] = pd.to_numeric(cutoff["cutoff_score"], errors="coerce")
     cutoff = cutoff[cutoff["year"].between(2023, 2025)].copy()  # 2023~2025 기준
 
     criteria = load_csv(CRITERIA)
@@ -321,7 +408,7 @@ def analyze_holistic_5level(pdf_text: str) -> Tuple[int, Dict[str, int], str]:
     return level, detail, summary
 
 
-def get_cutoff_23_25(cutoffs: pd.DataFrame, uni: str, dept: str, atype: str, track: str) -> Tuple[float, float]:
+def get_cutoff_23_25(cutoffs: pd.DataFrame, uni: str, dept: str, atype: str, track: str) -> Tuple[float, float, str]:
     hit = cutoffs[
         (cutoffs["university"] == uni)
         & (cutoffs["department"] == dept)
@@ -329,24 +416,38 @@ def get_cutoff_23_25(cutoffs: pd.DataFrame, uni: str, dept: str, atype: str, tra
         & (cutoffs["track_name"] == track)
     ]
     if hit.empty:
-        return 85.0, 80.0
+        return float("nan"), float("nan"), "none"
 
     c50 = hit.loc[hit["percentile_type"] == 50, "cutoff_score"].dropna()
     c70 = hit.loc[hit["percentile_type"] == 70, "cutoff_score"].dropna()
 
-    cutoff50 = float(c50.median()) if not c50.empty else 85.0
-    cutoff70 = float(c70.median()) if not c70.empty else 80.0
-    return cutoff50, cutoff70
+    cutoff50 = float(c50.median()) if not c50.empty else float("nan")
+    cutoff70 = float(c70.median()) if not c70.empty else float("nan")
+    if pd.notna(cutoff50):
+        return cutoff50, cutoff70, "50"
+    if pd.notna(cutoff70):
+        return cutoff50, cutoff70, "70"
+    return cutoff50, cutoff70, "none"
 
 
-def rating_4level(student_index: float, cutoff50: float, cutoff70: float) -> Tuple[str, str]:
-    if student_index >= cutoff50:
-        return "상향 가능", f"지표({student_index:.1f})가 50% 컷({cutoff50:.1f}) 이상입니다."
-    if student_index >= cutoff70:
-        return "적정", f"지표({student_index:.1f})가 70% 컷({cutoff70:.1f}) 이상입니다."
-    if student_index >= cutoff70 - 5:
-        return "안전", f"지표({student_index:.1f})가 70% 컷({cutoff70:.1f})에 근접합니다."
-    return "하향 권장", f"지표({student_index:.1f})가 70% 컷({cutoff70:.1f})보다 낮습니다."
+def rating_4level(student_grade: float, cutoff50: float, cutoff70: float, basis: str) -> Tuple[str, str]:
+    # 내신 등급은 낮을수록 유리
+    if basis == "none":
+        return "입결 데이터 없음", "해당 조합의 2023~2025 50/70 컷 데이터가 없습니다."
+    if basis == "50":
+        if student_grade <= cutoff50:
+            return "상향 가능", f"내신({student_grade:.2f})이 50% 컷({cutoff50:.2f}) 이내입니다."
+        if pd.notna(cutoff70) and student_grade <= cutoff70:
+            return "적정", f"내신({student_grade:.2f})이 70% 컷({cutoff70:.2f}) 이내입니다."
+        if pd.notna(cutoff70) and student_grade <= cutoff70 + 0.5:
+            return "소신", f"내신({student_grade:.2f})이 70% 컷({cutoff70:.2f})에 근접합니다."
+        return "하향 권장", f"내신({student_grade:.2f})이 컷 대비 낮습니다."
+    # basis == "70"
+    if student_grade <= cutoff70:
+        return "적정", f"50% 컷이 없어 70% 컷({cutoff70:.2f}) 기준으로 판단했습니다."
+    if student_grade <= cutoff70 + 0.5:
+        return "소신", f"50% 컷이 없어 70% 컷({cutoff70:.2f}) 기준으로 근접 판정했습니다."
+    return "하향 권장", f"50% 컷이 없어 70% 컷({cutoff70:.2f}) 기준으로 하향 권장입니다."
 
 
 def _basis_university(uni: str) -> str:
@@ -366,6 +467,7 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
         f"- 학생 연락처: {payload.get('student_phone', '')}",
         f"- 이메일: {payload.get('email', '')}",
         f"- 학부모 연락처: {payload.get('parent_phone', '')}",
+        f"- 내신 등급(평균): {payload.get('student_grade_score', '')}",
         "",
         "## 2) 학생부 분석 (5단계)",
         f"- 종합단계: {payload.get('holistic_level', 0)}단계",
@@ -378,7 +480,9 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
         basis = _basis_university(c.university)
         lines.append(
             f"- {c.support_no}. {c.university} / {c.department} / {c.admission_type} / {c.track_name}"
-            f" -> {c.diag_level} (50컷 {c.cutoff50:.1f}, 70컷 {c.cutoff70:.1f}, 기준대학 {basis})"
+            f" -> {c.diag_level} (50컷 {c.cutoff50 if pd.notna(c.cutoff50) else '없음'}, "
+            f"70컷 {c.cutoff70 if pd.notna(c.cutoff70) else '없음'}, "
+            f"판단기준 {c.cutoff_basis}, 기준대학 {basis})"
         )
         lines.append(f"  - 판단근거: {c.diag_reason}")
 
@@ -409,6 +513,7 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
         ("학생 연락처", payload.get("student_phone", "")),
         ("이메일", payload.get("email", "")),
         ("학부모 연락처", payload.get("parent_phone", "")),
+        ("내신 등급(평균)", payload.get("student_grade_score", "")),
     ]
     for k, v in info_rows:
         doc.add_paragraph(f"- {k}: {v}")
@@ -419,7 +524,7 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
         doc.add_paragraph(f"- {k}: {v}점")
 
     doc.add_heading("3) 지원희망대학 평가", level=2)
-    table = doc.add_table(rows=1, cols=7)
+    table = doc.add_table(rows=1, cols=8)
     hdr = table.rows[0].cells
     hdr[0].text = "번호"
     hdr[1].text = "대학/모집단위"
@@ -428,6 +533,7 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
     hdr[4].text = "50컷"
     hdr[5].text = "70컷"
     hdr[6].text = "판단근거"
+    hdr[7].text = "판단기준"
 
     for c in choices:
         row = table.add_row().cells
@@ -435,9 +541,10 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
         row[1].text = f"{c.university} / {c.department}"
         row[2].text = f"{c.admission_type} / {c.track_name}"
         row[3].text = c.diag_level
-        row[4].text = f"{c.cutoff50:.1f}"
-        row[5].text = f"{c.cutoff70:.1f}"
+        row[4].text = f"{c.cutoff50:.2f}" if pd.notna(c.cutoff50) else "없음"
+        row[5].text = f"{c.cutoff70:.2f}" if pd.notna(c.cutoff70) else "없음"
         row[6].text = c.diag_reason
+        row[7].text = c.cutoff_basis
 
     doc.add_heading("4) 적용 기준", level=2)
     doc.add_paragraph("- 대학 리스트: 2026 수시검색기 + 2027 업로드 병합 (충돌 시 2027 우선)")
@@ -570,38 +677,48 @@ def main() -> None:
     st.markdown("<div class='service-subtitle'>by 대치수프리마</div>", unsafe_allow_html=True)
     st.caption("기준: 2026+2027 수시 병합(충돌 시 2027 우선), 2023~2025 50/70컷")
 
-    # 데이터 업로드 관리
-    st.subheader("데이터 관리")
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        st.download_button("2026 수시 템플릿", SUSI_2026.read_bytes() if SUSI_2026.exists() else b"", file_name="susi_explorer.csv")
-        up1 = st.file_uploader("2026 수시 CSV 업로드", type=["csv"], key="up_s26")
-        if up1:
-            save_uploaded_csv(up1, SUSI_2026)
-            st.success("2026 수시 데이터 반영 완료")
-    with c2:
-        st.download_button("2027 수시 템플릿", SUSI_2027.read_bytes() if SUSI_2027.exists() else b"", file_name="susi_explorer_2027.csv")
-        up2 = st.file_uploader("2027 수시 CSV 업로드", type=["csv"], key="up_s27")
-        if up2:
-            save_uploaded_csv(up2, SUSI_2027)
-            st.success("2027 수시 데이터 반영 완료")
-    with c3:
-        st.download_button("컷 템플릿", CUTOFFS.read_bytes() if CUTOFFS.exists() else b"", file_name="admission_cutoffs.csv")
-        up3 = st.file_uploader("컷 CSV 업로드(2023~2025)", type=["csv"], key="up_cut")
-        if up3:
-            save_uploaded_csv(up3, CUTOFFS)
-            st.success("컷 데이터 반영 완료")
-    with c4:
-        st.download_button("학생부 평가기준 템플릿", CRITERIA.read_bytes() if CRITERIA.exists() else b"", file_name="holistic_criteria.csv")
-        up4 = st.file_uploader("평가기준 CSV 업로드", type=["csv"], key="up_criteria")
-        if up4:
-            save_uploaded_csv(up4, CRITERIA)
-            st.success("평가기준 데이터 반영 완료")
+    with st.sidebar:
+        st.markdown("### 운영 설정")
+        dataset_mode_label = st.radio(
+            "대학 데이터 사용 방식",
+            ["2026+2027 병합(충돌 시 2027 우선)", "2027만 사용(전체 전환)"],
+            index=0,
+            help="2027학년도 전체 데이터 발표 후에는 '2027만 사용'으로 운영 가능합니다.",
+        )
+        dataset_mode = "2027" if dataset_mode_label.startswith("2027만") else "merge"
 
-    susi_df, cutoff_df, _criteria_df = load_data()
+        with st.expander("데이터 관리 (필요 시 열람/교체)", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.download_button("2026 수시 템플릿", SUSI_2026.read_bytes() if SUSI_2026.exists() else b"", file_name="susi_explorer.csv")
+                up1 = st.file_uploader("2026 수시 CSV 업로드", type=["csv"], key="up_s26")
+                if up1:
+                    save_uploaded_csv(up1, SUSI_2026)
+                    st.success("2026 수시 데이터 반영 완료")
+            with c2:
+                st.download_button("2027 수시 템플릿", SUSI_2027.read_bytes() if SUSI_2027.exists() else b"", file_name="susi_explorer_2027.csv")
+                up2 = st.file_uploader("2027 수시 CSV 업로드", type=["csv"], key="up_s27")
+                if up2:
+                    save_uploaded_csv(up2, SUSI_2027)
+                    st.success("2027 수시 데이터 반영 완료")
+            c3, c4 = st.columns(2)
+            with c3:
+                st.download_button("컷 템플릿", CUTOFFS.read_bytes() if CUTOFFS.exists() else b"", file_name="admission_cutoffs.csv")
+                up3 = st.file_uploader("컷 CSV 업로드(2023~2025)", type=["csv"], key="up_cut")
+                if up3:
+                    save_uploaded_csv(up3, CUTOFFS)
+                    st.success("컷 데이터 반영 완료")
+            with c4:
+                st.download_button("학생부 평가기준 템플릿", CRITERIA.read_bytes() if CRITERIA.exists() else b"", file_name="holistic_criteria.csv")
+                up4 = st.file_uploader("평가기준 CSV 업로드", type=["csv"], key="up_criteria")
+                if up4:
+                    save_uploaded_csv(up4, CRITERIA)
+                    st.success("평가기준 데이터 반영 완료")
+
+    susi_df, cutoff_df, _criteria_df = load_data(dataset_mode=dataset_mode)
     st.caption(f"대학 목록 데이터: {len(susi_df)}건 | 컷 데이터(2023~2025): {len(cutoff_df)}건")
     if cutoff_df.empty:
-        st.warning("컷 데이터에 2023~2025 연도가 없습니다. 기본 컷(50%=85, 70%=80)으로 판단됩니다.")
+        st.warning("컷 데이터(2023~2025)가 없어 '입결 데이터 없음'으로 표기됩니다.")
 
     if "step" not in st.session_state:
         st.session_state.step = 1
@@ -634,7 +751,6 @@ def main() -> None:
                 student_phone = st.text_input("학생 전화번호 *")
                 email = st.text_input("메일주소(필수) *")
                 parent_phone = st.text_input("학부모 연락처 *")
-                student_index = st.slider("학생 지표(내신/활동 종합 지표)", min_value=50.0, max_value=100.0, value=82.0, step=0.5)
 
             ok = st.form_submit_button("다음 단계")
 
@@ -659,7 +775,6 @@ def main() -> None:
                     "student_phone": student_phone.strip(),
                     "email": email.strip(),
                     "parent_phone": parent_phone.strip(),
-                    "student_index": float(student_index),
                 }
                 st.session_state.step = 2
                 st.rerun()
@@ -668,6 +783,22 @@ def main() -> None:
     elif st.session_state.step == 2:
         st.subheader("2단계 - 학생부 분석")
         pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
+        g1, g2 = st.columns(2)
+        with g1:
+            grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4")
+        with g2:
+            manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01)
+
+        calc_grade = None
+        if grades_text.strip():
+            try:
+                vals = [float(x.strip()) for x in grades_text.split(",") if x.strip()]
+                if vals:
+                    calc_grade = round(sum(vals) / len(vals), 2)
+                    st.caption(f"자동 계산 내신 평균: {calc_grade}")
+            except Exception:
+                st.warning("내신 등급 형식이 올바르지 않습니다. 예: 2.1, 2.3, 1.9")
+
         c1, c2, c3 = st.columns(3)
         with c1:
             if st.button("이전 단계"):
@@ -677,11 +808,13 @@ def main() -> None:
             if st.button("분석 실행", use_container_width=True):
                 text = extract_pdf_text(pdf_file) if pdf_file else ""
                 level, detail, summary = analyze_holistic_5level(text)
+                grade_score = calc_grade if calc_grade is not None else float(manual_grade)
                 st.session_state.holistic = {
                     "pdf_summary": summary,
                     "holistic_level": level,
                     "holistic_detail": detail,
                     "holistic_score": sum(detail.values()) / len(detail),
+                    "student_grade_score": grade_score,
                 }
         with c3:
             if st.button("다음 단계", use_container_width=True):
@@ -699,6 +832,7 @@ def main() -> None:
                 st.metric("종합 단계", f"{st.session_state.holistic.get('holistic_level', 0)}단계")
             with m2:
                 st.metric("평균 점수", f"{st.session_state.holistic.get('holistic_score', 0):.1f}")
+            st.metric("내신 평균", f"{st.session_state.holistic.get('student_grade_score', 0):.2f}")
             for k, v in detail.items():
                 st.write(f"- {k}: {v}점")
                 st.progress(min(max(int(v), 0), 100))
@@ -725,13 +859,13 @@ def main() -> None:
 
         if nxt:
             rows: List[SupportChoice] = []
-            student_index = float(st.session_state.profile.get("student_index", 0))
+            student_grade = float(st.session_state.holistic.get("student_grade_score", 0) or 0)
             for i, (uni, dept, atype, track) in enumerate(supports, start=1):
                 if not (uni and dept and atype and track):
                     continue
-                c50, c70 = get_cutoff_23_25(cutoff_df, uni, dept, atype, track)
-                level, reason = rating_4level(student_index, c50, c70)
-                rows.append(SupportChoice(i, uni, dept, atype, track, level, reason, c50, c70))
+                c50, c70, basis = get_cutoff_23_25(cutoff_df, uni, dept, atype, track)
+                level, reason = rating_4level(student_grade, c50, c70, basis)
+                rows.append(SupportChoice(i, uni, dept, atype, track, level, reason, c50, c70, basis))
 
             if not rows:
                 st.warning("최소 1개 이상의 지원 대학/학과/전형 정보를 입력해 주세요.")
@@ -747,6 +881,7 @@ def main() -> None:
         payload = {
             **st.session_state.profile,
             **st.session_state.holistic,
+            "student_index": st.session_state.holistic.get("student_grade_score", 0),
             "top15_reference": TOP15,
         }
         choices = [SupportChoice(**x) for x in st.session_state.supports]
