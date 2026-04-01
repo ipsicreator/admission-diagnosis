@@ -426,8 +426,45 @@ def extract_grade_points_from_excel(uploaded_file) -> List[float]:
     return vals
 
 
-def analyze_holistic_5level(pdf_text: str) -> Tuple[int, Dict[str, int], str]:
+def _criterion_keywords() -> Dict[str, List[str]]:
+    return {
+        "학업역량": ["수업", "탐구", "학습", "과제", "교과"],
+        "전공적합성": ["진로", "전공", "심화", "프로젝트", "연계"],
+        "자기주도성": ["주도", "기획", "문제해결", "탐색", "개선"],
+        "공동체역량": ["협업", "소통", "리더", "봉사", "배려"],
+        "발전가능성": ["성장", "피드백", "도전", "확장", "변화"],
+    }
+
+
+def _extract_evidence_by_criterion(pdf_text: str, top_n: int = 3) -> Dict[str, List[str]]:
+    text = str(pdf_text or "").replace("\r", " ")
+    lines = [x.strip() for x in re.split(r"[\n\.]", text) if x.strip()]
+    keywords = _criterion_keywords()
+    out: Dict[str, List[str]] = {}
+    for k, words in keywords.items():
+        hits: List[str] = []
+        for ln in lines:
+            if any(w in ln for w in words):
+                hits.append(ln[:140])
+            if len(hits) >= top_n:
+                break
+        out[k] = hits
+    return out
+
+
+def convert_grade_to_9_scale(grade_value: float, student_grade_label: str) -> Tuple[float, str]:
+    g = float(grade_value)
+    if student_grade_label in ["고1", "고2"]:
+        # 5등급 -> 9등급 선형 환산: 1->1, 3->5, 5->9
+        converted = 1.0 + (g - 1.0) * 2.0
+        converted = max(1.0, min(9.0, converted))
+        return round(converted, 2), "고1~2는 5등급을 9등급으로 환산 적용"
+    return round(max(1.0, min(9.0, g)), 2), "고3/N수는 9등급 기준 적용"
+
+
+def analyze_holistic_5level(pdf_text: str) -> Tuple[int, Dict[str, int], str, Dict[str, List[str]]]:
     text = (pdf_text or "").strip()
+    evidence = _extract_evidence_by_criterion(text)
     if not text:
         detail = {
             "학업역량": 45,
@@ -436,15 +473,10 @@ def analyze_holistic_5level(pdf_text: str) -> Tuple[int, Dict[str, int], str]:
             "공동체역량": 45,
             "발전가능성": 45,
         }
+        summary = "학생부 PDF에서 텍스트가 추출되지 않아 기본값으로 산정했습니다. (스캔본은 OCR 권장)"
     else:
         base = min(100, len(text) // 60)
-        keywords = {
-            "학업역량": ["수업", "탐구", "학습", "과제", "교과"],
-            "전공적합성": ["진로", "전공", "심화", "프로젝트", "연계"],
-            "자기주도성": ["주도", "기획", "문제해결", "탐색", "개선"],
-            "공동체역량": ["협업", "소통", "리더", "봉사", "배려"],
-            "발전가능성": ["성장", "피드백", "도전", "확장", "변화"],
-        }
+        keywords = _criterion_keywords()
         detail = {}
         for k, words in keywords.items():
             cnt = sum(text.count(w) for w in words)
@@ -461,8 +493,9 @@ def analyze_holistic_5level(pdf_text: str) -> Tuple[int, Dict[str, int], str]:
         level = 2
     else:
         level = 1
-    summary = f"학생부 분석 결과 5단계 중 {level}단계로 추정됩니다."
-    return level, detail, summary
+    if text:
+        summary = f"학생부 분석 결과 5단계 중 {level}단계로 추정됩니다."
+    return level, detail, summary, evidence
 
 
 def get_cutoff_23_25(cutoffs: pd.DataFrame, uni: str, dept: str, atype: str, track: str) -> Tuple[float, float, str]:
@@ -534,6 +567,19 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
         lines.append(f"- {k}: {v}점")
 
     lines.extend(["", "## 3) 지원희망대학 평가 (최대 6개)"])
+    evidence = payload.get("holistic_evidence", {})
+    lines.append("")
+    lines.append("## 2-1) 학생부 항목별 근거 내용")
+    for k in ["학업역량", "전공적합성", "자기주도성", "공동체역량", "발전가능성"]:
+        ev = evidence.get(k, [])
+        lines.append(f"- {k}:")
+        if ev:
+            for s in ev:
+                lines.append(f"  - {s}")
+        else:
+            lines.append("  - 근거 문장 추출 없음")
+
+    lines.extend(["", "## 3) 지원희망대학 평가 (최대 6개)"])
     for c in choices:
         basis = _basis_university(c.university)
         lines.append(
@@ -581,6 +627,17 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
     doc.add_paragraph(f"- 종합단계: {payload.get('holistic_level', 0)}단계")
     for k, v in holistic_detail.items():
         doc.add_paragraph(f"- {k}: {v}점")
+
+    doc.add_heading("2-1) 학생부 항목별 근거 내용", level=2)
+    evidence = payload.get("holistic_evidence", {})
+    for k in ["학업역량", "전공적합성", "자기주도성", "공동체역량", "발전가능성"]:
+        doc.add_paragraph(f"- {k}:")
+        ev = evidence.get(k, [])
+        if ev:
+            for s in ev:
+                doc.add_paragraph(f"  · {s}")
+        else:
+            doc.add_paragraph("  · 근거 문장 추출 없음")
 
     doc.add_heading("3) 지원희망대학 평가", level=2)
     table = doc.add_table(rows=1, cols=8)
@@ -734,12 +791,7 @@ def main() -> None:
 
     st.markdown("<div class='service-title'>나의 입시 위치 진단서비스</div>", unsafe_allow_html=True)
     st.markdown("<div class='service-subtitle'>by 대치수프리마</div>", unsafe_allow_html=True)
-    meta_l, meta_r = st.columns([3, 4])
-    with meta_l:
-        st.markdown(
-            "<div class='top-meta-left'>기준: 2026+2027 수시 병합(충돌 시 2027 우선), 2023~2025 50/70컷</div>",
-            unsafe_allow_html=True,
-        )
+    _, meta_r = st.columns([3, 4])
     with meta_r:
         st.markdown(
             "<div class='top-meta-right'>대학기준: 2026 183개 대학 및 2027 수시 모집요강 발표한 서울경기지역 학교</div>",
@@ -859,6 +911,11 @@ def main() -> None:
             grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4")
         with g2:
             manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01)
+        current_grade_label = st.session_state.profile.get("grade", "")
+        if current_grade_label in ["고1", "고2"]:
+            st.info("내신 계산 안내: 고1~2학년은 5등급제를 9등급제로 환산하여 판단합니다.")
+        else:
+            st.info("내신 계산 안내: 고3 및 N수 이상은 9등급제 기준으로 판단합니다.")
 
         calc_grade = None
         calc_source = ""
@@ -880,7 +937,7 @@ def main() -> None:
         with c2:
             if st.button("분석 실행", use_container_width=True):
                 text = extract_pdf_text(pdf_file) if pdf_file else ""
-                level, detail, summary = analyze_holistic_5level(text)
+                level, detail, summary, evidence = analyze_holistic_5level(text)
                 excel_points = extract_grade_points_from_excel(excel_file)
                 pdf_points = extract_grade_points_from_pdf_text(text)
 
@@ -897,13 +954,17 @@ def main() -> None:
                     grade_score = float(manual_grade)
                     grade_source = "직접 입력"
 
+                grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+
                 st.session_state.holistic = {
                     "pdf_summary": summary,
                     "holistic_level": level,
                     "holistic_detail": detail,
+                    "holistic_evidence": evidence,
                     "holistic_score": sum(detail.values()) / len(detail),
-                    "student_grade_score": grade_score,
-                    "student_grade_source": grade_source,
+                    "student_grade_score": grade_score_9,
+                    "student_grade_source": f"{grade_source} | {grade_policy}",
+                    "student_grade_raw": grade_score,
                 }
                 st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
         with c3:
@@ -923,11 +984,18 @@ def main() -> None:
                 st.metric("종합 단계", f"{st.session_state.holistic.get('holistic_level', 0)}단계")
             with m2:
                 st.metric("평균 점수", f"{st.session_state.holistic.get('holistic_score', 0):.1f}")
-            st.metric("내신 평균", f"{st.session_state.holistic.get('student_grade_score', 0):.2f}")
+            st.metric("내신 평균(판단용 9등급)", f"{st.session_state.holistic.get('student_grade_score', 0):.2f}")
+            if st.session_state.holistic.get("student_grade_raw") is not None:
+                st.caption(f"원입력 내신: {st.session_state.holistic.get('student_grade_raw', 0):.2f}")
             st.caption(f"내신 산출 기준: {st.session_state.holistic.get('student_grade_source', '-')}")
             for k, v in detail.items():
                 st.write(f"- {k}: {v}점")
                 st.progress(min(max(int(v), 0), 100))
+                ev = st.session_state.holistic.get("holistic_evidence", {}).get(k, [])
+                if ev:
+                    st.caption("근거: " + " | ".join(ev))
+                else:
+                    st.caption("근거: 추출 없음")
         else:
             st.markdown("### 분석 결과")
             st.info("학생부 PDF를 업로드하고 '분석 실행'을 누르면 이 영역에 결과가 표시됩니다.")
