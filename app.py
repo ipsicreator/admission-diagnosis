@@ -1383,11 +1383,11 @@ def main() -> None:
         with c1:
             if st.button("PDF 분석 실행", use_container_width=True):
                 if not pdf_file:
-                    st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
+                    st.error("학생부 PDF 파일을 먼저 업로드해 주세요.")
                 else:
                     text, text_source = extract_pdf_text(pdf_file)
                     if not str(text).strip():
-                        st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
+                        st.error("텍스트 추출과 OCR 자동분석 모두 실패했습니다. 스캔 품질이 높은 PDF로 다시 시도하거나 '분석 생략 후 3단계 이동'을 이용해 주세요.")
                     else:
                         level, detail, summary, evidence = analyze_holistic_5level(text)
                         pdf_points = extract_grade_points_from_pdf_text(text)
