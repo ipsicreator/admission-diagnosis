@@ -85,7 +85,7 @@ def inject_css() -> None:
           background: rgba(248, 250, 252, 0.85) !important;
         }
         :root {
-          --tablet-fixed-width: 940px;
+          --tablet-fixed-width: 980px;
         }
         section.main > div.block-container {
           width: var(--tablet-fixed-width) !important;
@@ -104,27 +104,27 @@ def inject_css() -> None:
         }
         .service-title {
           text-align: center;
-          font-size: 38px;
+          font-size: 25pt;
           font-weight: 800;
-          margin-bottom: 2px;
+          margin-bottom: 0;
           white-space: nowrap;
           color: #0f172a;
         }
         .service-subtitle {
           text-align: center;
-          font-size: 22px;
+          font-size: 13pt;
           font-weight: 600;
-          margin-bottom: 14px;
+          margin-bottom: 18px;
           opacity: 1;
           white-space: nowrap;
           color: #334155;
         }
         .step-box {
           text-align: center;
-          font-size: 24px;
+          font-size: 22px;
           font-weight: 700;
-          padding: 12px 6px;
-          border-radius: 14px;
+          padding: 13px 6px;
+          border-radius: 16px;
           white-space: nowrap;
           color: #334155;
           background: #f1f5f9;
