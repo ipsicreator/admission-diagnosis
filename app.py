@@ -131,9 +131,17 @@ def inject_css() -> None:
           border: 1px solid #e2e8f0;
         }
         .step-active {
-          background: #1d4ed8;
-          border: 1px solid #1d4ed8;
+          background: #1d4ed8 !important;
+          border: 1px solid #1d4ed8 !important;
           color: #ffffff !important;
+        }
+        [data-testid="stForm"] label,
+        [data-testid="stTextInput"] label,
+        [data-testid="stSelectbox"] label,
+        [data-testid="stNumberInput"] label,
+        [data-testid="stTextArea"] label {
+          color: #334155 !important;
+          font-weight: 700 !important;
         }
         .footer-note {
           text-align: center;
