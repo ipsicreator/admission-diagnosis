@@ -70,6 +70,14 @@ def inject_css() -> None:
         html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="stSidebar"] * {
           font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
         }
+        h1, h2, h3, h4, h5, h6, p, span, label, small, strong, em {
+          background: transparent !important;
+          text-shadow: none !important;
+        }
+        [data-testid="stMarkdownContainer"] * {
+          background: transparent !important;
+          text-shadow: none !important;
+        }
         [data-testid="stAppViewContainer"] {
           background: #f8fafc !important;
         }
