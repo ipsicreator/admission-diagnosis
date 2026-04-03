@@ -2,6 +2,7 @@
 import json
 import re
 import sqlite3
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -17,7 +18,7 @@ BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
 OUTPUT_DIR = BASE_DIR / "output"
 DB_PATH = BASE_DIR / "admission_diag.db"
-
+GRADE_BRIDGE_PATH = OUTPUT_DIR / "grade_bridge.json"
 SUSI_2026 = DATA_DIR / "susi_explorer.csv"
 SUSI_2027 = DATA_DIR / "susi_explorer_2027.csv"
 CUTOFFS = DATA_DIR / "admission_cutoffs.csv"
@@ -65,40 +66,73 @@ def inject_css() -> None:
     st.markdown(
         """
         <style>
+        @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
+        html, body, [class*="css"], [data-testid="stAppViewContainer"], [data-testid="stSidebar"] * {
+          font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif !important;
+        }
+        [data-testid="stAppViewContainer"] {
+          background: #f8fafc !important;
+        }
+        [data-testid="stHeader"] {
+          background: rgba(248, 250, 252, 0.85) !important;
+        }
+        :root {
+          --tablet-fixed-width: 940px;
+        }
         section.main > div.block-container {
-          max-width: 1080px;
+          width: var(--tablet-fixed-width) !important;
+          min-width: var(--tablet-fixed-width) !important;
+          max-width: var(--tablet-fixed-width) !important;
           padding-top: 1.1rem;
           padding-bottom: 2rem;
+          margin-left: auto !important;
+          margin-right: auto !important;
+          background: #ffffff !important;
+          border: 1px solid #e2e8f0 !important;
+          border-radius: 24px !important;
+          box-shadow: 0 12px 34px rgba(15, 23, 42, 0.08) !important;
+          padding-left: 22px !important;
+          padding-right: 22px !important;
         }
         .service-title {
           text-align: center;
-          font-size: 32px; /* tablet primary */
+          font-size: 38px;
           font-weight: 800;
           margin-bottom: 2px;
+          white-space: nowrap;
+          color: #0f172a;
         }
         .service-subtitle {
           text-align: center;
-          font-size: 20px; /* tablet secondary */
+          font-size: 22px;
           font-weight: 600;
           margin-bottom: 14px;
-          opacity: 0.95;
+          opacity: 1;
+          white-space: nowrap;
+          color: #334155;
         }
         .step-box {
           text-align: center;
           font-size: 24px;
           font-weight: 700;
-          padding: 10px 4px;
-          border-radius: 10px;
+          padding: 12px 6px;
+          border-radius: 14px;
+          white-space: nowrap;
+          color: #334155;
+          background: #f1f5f9;
+          border: 1px solid #e2e8f0;
         }
         .step-active {
-          background: rgba(30, 91, 255, 0.18);
-          border: 1px solid rgba(84, 139, 255, 0.55);
+          background: #1d4ed8;
+          border: 1px solid #1d4ed8;
+          color: #ffffff !important;
         }
         .footer-note {
           text-align: center;
           margin-top: 22px;
-          opacity: 0.85;
+          opacity: 1;
           font-size: 14px;
+          color: #64748b;
         }
         .top-meta-left {
           font-size: 13px;
@@ -107,38 +141,166 @@ def inject_css() -> None:
           margin-bottom: 4px;
         }
         .top-meta-right {
-          font-size: 13px;
-          opacity: 0.9;
+          font-size: 11px;
+          opacity: 1;
           text-align: right;
           margin-bottom: 4px;
+          color: #64748b;
+        }
+        .login-preview-wrap {
+          max-width: 560px;
+          margin: 24px auto 0 auto;
+          padding: 22px 20px;
+          border-radius: 14px;
+          border: 1px solid rgba(84, 139, 255, 0.35);
+          background: rgba(20, 32, 58, 0.45);
+        }
+        .login-preview-title {
+          text-align: center;
+          font-size: 24px;
+          font-weight: 800;
+          margin-bottom: 6px;
+        }
+        .login-preview-sub {
+          text-align: center;
+          font-size: 14px;
+          opacity: 0.9;
+          margin-bottom: 16px;
+        }
+        .login-btn-google,
+        .login-btn-kakao,
+        .login-btn-naver {
+          display: block;
+          width: 100%;
+          border-radius: 10px;
+          padding: 12px 14px;
+          font-size: 16px;
+          font-weight: 700;
+          margin: 8px 0;
+          text-align: center;
+          text-decoration: none;
+        }
+        .login-btn-google {
+          background: #ffffff;
+          color: #121212 !important;
+          border: 1px solid #d7d7d7;
+        }
+        .login-btn-naver {
+          background: #03c75a;
+          color: #ffffff !important;
+          border: 1px solid #03c75a;
+        }
+        .login-btn-kakao {
+          background: #fee500;
+          color: #111111 !important;
+          border: 1px solid #fee500;
+        }
+        .upload-sample-wrap {
+          border: 1px solid rgba(84, 139, 255, 0.28);
+          border-radius: 12px;
+          padding: 12px 14px;
+          margin-bottom: 8px;
+          background: rgba(22, 28, 44, 0.55);
+        }
+        .upload-sample-title {
+          font-size: 13px;
+          font-weight: 700;
+          margin-bottom: 8px;
+          opacity: 0.9;
+        }
+        .upload-sample-row {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 10px;
+        }
+        .upload-sample-btn {
+          border: 1px solid rgba(84, 139, 255, 0.45);
+          border-radius: 10px;
+          padding: 8px 12px;
+          font-size: 13px;
+          font-weight: 700;
+          min-width: 88px;
+          text-align: center;
+          background: rgba(15, 22, 36, 0.9);
+        }
+        .upload-sample-meta {
+          font-size: 12px;
+          opacity: 0.75;
+          flex: 1;
+          text-align: right;
         }
         [data-testid="stButton"] > button,
         [data-testid="stDownloadButton"] > button {
           min-height: 44px !important;
           border-radius: 10px !important;
           font-size: 16px !important;
+          border: 1px solid #cbd5e1 !important;
+          background: #ffffff !important;
+          color: #0f172a !important;
         }
         [data-testid="stTextInput"] input,
         [data-testid="stNumberInput"] input,
         [data-testid="stSelectbox"] div[data-baseweb="select"] > div {
           min-height: 44px !important;
           border-radius: 10px !important;
+          background: #ffffff !important;
+          border: 1px solid #cbd5e1 !important;
+          color: #0f172a !important;
         }
         [data-testid="stExpander"] summary {
           font-size: 18px !important;
           font-weight: 700 !important;
         }
-        @media (max-width: 1200px) {
-          section.main > div.block-container { max-width: 960px; }
-          .service-title { font-size: 28px; }
-          .service-subtitle { font-size: 18px; }
-          .step-box { font-size: 20px; }
-        }
+        /* 고정 레이아웃: 반응형 축소 비활성화 */
         @media (max-width: 860px) {
           .top-meta-right { text-align: left; }
-          .step-box { font-size: 17px; padding: 8px 2px; }
+          .step-box { font-size: 22px; padding: 10px 4px; }
         }
         </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_hidden_login_preview() -> None:
+    st.markdown("<div class='login-preview-title'>로그인</div>", unsafe_allow_html=True)
+    st.markdown("<div class='login-preview-sub'>내부 시안용 화면 (기본 사용자 미노출)</div>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <div class="login-preview-wrap">
+          <a class="login-btn-google" href="javascript:void(0);">Google로 계속하기</a>
+          <a class="login-btn-naver" href="javascript:void(0);">네이버로 계속하기</a>
+          <a class="login-btn-kakao" href="javascript:void(0);">카카오톡으로 계속하기</a>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+def render_upload_box_samples() -> None:
+    st.markdown(
+        """
+        <div class="upload-sample-wrap">
+          <div class="upload-sample-title">샘플 A (컴팩트)</div>
+          <div class="upload-sample-row">
+            <div class="upload-sample-btn">업로드</div>
+            <div class="upload-sample-meta">PDF · 최대 200MB</div>
+          </div>
+        </div>
+        <div class="upload-sample-wrap">
+          <div class="upload-sample-title">샘플 B (미니)</div>
+          <div class="upload-sample-row">
+            <div class="upload-sample-btn">파일 선택</div>
+            <div class="upload-sample-meta">드래그앤드롭 지원</div>
+          </div>
+        </div>
+        <div class="upload-sample-wrap">
+          <div class="upload-sample-title">샘플 C (라벨형)</div>
+          <div class="upload-sample-row">
+            <div class="upload-sample-btn">PDF 선택</div>
+            <div class="upload-sample-meta">학생부 PDF 전용</div>
+          </div>
+        </div>
         """,
         unsafe_allow_html=True,
     )
@@ -147,6 +309,27 @@ def inject_css() -> None:
 def ensure_dirs() -> None:
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _qp_value(name: str, default: str = "") -> str:
+    v = st.query_params.get(name, default)
+    if isinstance(v, list):
+        return str(v[0]) if v else default
+    return str(v)
+
+
+def _load_grade_bridge() -> Dict[str, float]:
+    if not GRADE_BRIDGE_PATH.exists():
+        return {}
+    try:
+        return json.loads(GRADE_BRIDGE_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _save_grade_bridge(data: Dict[str, float]) -> None:
+    ensure_dirs()
+    GRADE_BRIDGE_PATH.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
 def init_db() -> None:
@@ -664,7 +847,7 @@ def _student_record_summary(detail: Dict[str, int]) -> Tuple[str, List[str], Lis
 def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_detail: Dict[str, int]) -> str:
     summary_counts = _support_summary(choices)
     lines = [
-        "# 대치수프리마 입시 진단 종합보고서",
+        "# 나의 입시 위치 진단 서비스 by 대치수프리마",
         f"- 생성시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
         "## 0) 종합 요약",
@@ -747,7 +930,7 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
 def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detail: Dict[str, int]) -> bytes:
     summary_counts = _support_summary(choices)
     doc = Document()
-    doc.add_heading("대치수프리마 입시 진단 종합보고서", level=1)
+    doc.add_heading("나의 입시 위치 진단 서비스 by 대치수프리마", level=1)
     doc.add_paragraph(f"생성시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     doc.add_heading("0) 종합 요약", level=2)
@@ -957,17 +1140,77 @@ def _choice_input_block(susi_df: pd.DataFrame, no: int) -> Tuple[str, str, str, 
     return uni_text.strip(), dept_text.strip(), atype.strip(), track_text.strip()
 
 
+
+def render_grade_calculator_page() -> None:
+    st.markdown("<div class='service-title'>내신 계산기</div>", unsafe_allow_html=True)
+    st.markdown("<div class='service-subtitle'>새 창 계산 후 입력하기</div>", unsafe_allow_html=True)
+
+    bridge_id = _qp_value("bridge", "")
+    grade_label = _qp_value("grade", "")
+    curriculum_label, curriculum_file, curriculum_token = expected_curriculum_by_grade(grade_label)
+
+    st.caption(f"대상 학년: {grade_label} | 적용 과정: {curriculum_label}")
+    if curriculum_file.exists():
+        st.download_button(
+            f"{curriculum_label} 템플릿 다운로드",
+            data=curriculum_file.read_bytes(),
+            file_name=curriculum_file.name,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    excel_file = st.file_uploader("내신 계산 엑셀 업로드(xlsx)", type=["xlsx"], key="grade_calc_popup")
+    if excel_file and (curriculum_token not in excel_file.name):
+        st.warning(f"현재 대상은 {curriculum_label}입니다. 업로드 파일명을 확인해 주세요.")
+
+    if st.button("내신 계산", use_container_width=True):
+        if not excel_file:
+            st.warning("엑셀 파일을 먼저 업로드해 주세요.")
+        else:
+            points = extract_grade_points_from_excel(excel_file)
+            if not points:
+                st.error("엑셀에서 등급 데이터를 찾지 못했습니다.")
+            else:
+                raw_grade = round(sum(points) / len(points), 2)
+                grade_9, policy = convert_grade_to_9_scale(raw_grade, grade_label)
+                st.session_state["grade_calc_result_raw"] = raw_grade
+                st.session_state["grade_calc_result_9"] = grade_9
+                st.session_state["grade_calc_policy"] = policy
+                st.success(f"계산 완료: 원점수 {raw_grade:.2f} / 9등급 환산 {grade_9:.2f}")
+
+    result_9 = st.session_state.get("grade_calc_result_9")
+    if result_9 is not None:
+        st.info(f"계산 결과(9등급 기준): {float(result_9):.2f}")
+        if st.button("입력하기", use_container_width=True):
+            if not bridge_id:
+                st.error("연동 키가 없어 입력할 수 없습니다.")
+            else:
+                bridge = _load_grade_bridge()
+                bridge[bridge_id] = float(result_9)
+                _save_grade_bridge(bridge)
+                st.success("입력 완료. 메인 창으로 돌아가 '내신 계산값 불러오기'를 눌러주세요.")
+
 def main() -> None:
-    st.set_page_config(page_title="나의 입시 위치 진단 서비스", layout="wide")
+    st.set_page_config(page_title="나의 입시 위치 진단 서비스 by 대치수프리마", layout="wide")
     init_db()
     inject_css()
+
+    # Internal-only preview screen: not exposed in default UI.
+    query_mode = _qp_value("internal", "").strip().lower()
+    if query_mode == "login-preview":
+        render_hidden_login_preview()
+        return
+
+    tool_mode = _qp_value("tool", "").strip().lower()
+    if tool_mode == "gradecalc":
+        render_grade_calculator_page()
+        return
 
     st.markdown("<div class='service-title'>나의 입시 위치 진단서비스</div>", unsafe_allow_html=True)
     st.markdown("<div class='service-subtitle'>by 대치수프리마</div>", unsafe_allow_html=True)
     _, meta_r = st.columns([3, 4])
     with meta_r:
         st.markdown(
-            "<div class='top-meta-right'>대학기준: 2026 183개 대학 및 2027 수시 모집요강 발표한 서울경기지역 학교</div>",
+            "<div class='top-meta-right'>참여대학 : 2026 183개 대학 및 2027 수시 모집요강 발표한 서울경기지역 학교</div>",
             unsafe_allow_html=True,
         )
 
@@ -1075,154 +1318,107 @@ def main() -> None:
     # Step 2
     elif st.session_state.step == 2:
         st.subheader("2단계 - 학생부 분석")
-        mode = st.radio(
-            "2단계 작업 선택",
-            ["학생부 PDF 분석", "내신 계산(엑셀)"],
-            horizontal=True,
-        )
         current_grade_label = st.session_state.profile.get("grade", "")
-        curriculum_label, curriculum_file, curriculum_token = expected_curriculum_by_grade(current_grade_label)
-        st.caption(f"현재 입력 학년: {current_grade_label} | 적용 내신 과정: {curriculum_label}")
-        if current_grade_label in ["고1", "고2"]:
-            st.info("내신 계산 안내: 고1~2학년은 5등급제를 9등급제로 환산하여 판단합니다.")
-        else:
-            st.info("내신 계산 안내: 고3 및 N수 이상은 9등급제 기준으로 판단합니다.")
+        if "grade_bridge_id" not in st.session_state:
+            st.session_state.grade_bridge_id = uuid.uuid4().hex
+        bridge_id = st.session_state.grade_bridge_id
 
-        grades_text = ""
-        manual_grade = 2.5
-        calc_grade = None
-
-        if mode == "학생부 PDF 분석":
-            lpad, center, rpad = st.columns([1, 2, 1])
-            with center:
-                pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
-            g1, g2 = st.columns(2)
-            with g1:
-                grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4", key="grades_text_pdf")
-            with g2:
-                manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=2.5, step=0.01, key="manual_grade_pdf")
-
-            if grades_text.strip():
-                try:
-                    vals = [float(x.strip()) for x in grades_text.split(",") if x.strip()]
-                    if vals:
-                        calc_grade = round(sum(vals) / len(vals), 2)
-                        st.caption(f"자동 계산 내신 평균: {calc_grade}")
-                except Exception:
-                    st.warning("내신 등급 형식이 올바르지 않습니다. 예: 2.1, 2.3, 1.9")
-
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("PDF 분석 실행", use_container_width=True):
-                    if not pdf_file:
-                        st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
-                    else:
-                        text, text_source = extract_pdf_text(pdf_file)
-                        if not str(text).strip():
-                            st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
-                        else:
-                            level, detail, summary, evidence = analyze_holistic_5level(text)
-                            pdf_points = extract_grade_points_from_pdf_text(text)
-                            if calc_grade is not None:
-                                grade_score = calc_grade
-                                grade_source = "수기 입력 계산"
-                            elif pdf_points:
-                                grade_score = round(sum(pdf_points) / len(pdf_points), 2)
-                                grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
-                            else:
-                                grade_score = float(manual_grade)
-                                grade_source = "직접 입력"
-                            grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
-                            st.session_state.holistic = {
-                                "pdf_summary": summary,
-                                "holistic_level": level,
-                                "holistic_detail": detail,
-                                "holistic_evidence": evidence,
-                                "holistic_score": sum(detail.values()) / len(detail),
-                                "student_grade_score": grade_score_9,
-                                "student_grade_source": f"{grade_source} | {grade_policy}",
-                                "pdf_text_source": text_source,
-                                "student_grade_raw": grade_score,
-                            }
-                            st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
-            with c2:
-                if st.button("분석 생략 후 3단계 이동", use_container_width=True):
-                    base_grade = calc_grade if calc_grade is not None else float(manual_grade)
-                    grade_score_9, grade_policy = convert_grade_to_9_scale(base_grade, current_grade_label)
-                    st.session_state.holistic = {
-                        "pdf_summary": "학생부 분석 생략",
-                        "holistic_level": 0,
-                        "holistic_detail": {
-                            "학업역량": 0,
-                            "전공적합성": 0,
-                            "자기주도성": 0,
-                            "공동체역량": 0,
-                            "발전가능성": 0,
-                        },
-                        "holistic_evidence": {},
-                        "holistic_score": 0.0,
-                        "student_grade_score": grade_score_9,
-                        "student_grade_source": f"분석 생략 | {grade_policy}",
-                        "student_grade_raw": base_grade,
-                    }
-                    st.session_state.step = 3
+        top_l, top_r = st.columns([3, 1])
+        with top_l:
+            calc_url = f"?tool=gradecalc&bridge={bridge_id}&grade={current_grade_label}"
+            st.markdown(f"<a href=\"{calc_url}\" target=\"_blank\" style=\"font-weight:700;\">내신 계산기 새창 열기</a>", unsafe_allow_html=True)
+        with top_r:
+            if st.button("내신 계산값 불러오기", use_container_width=True):
+                bridge = _load_grade_bridge()
+                loaded = bridge.get(bridge_id)
+                if loaded is None:
+                    st.warning("아직 입력된 계산값이 없습니다.")
+                else:
+                    st.session_state.manual_grade_pdf = float(loaded)
+                    st.success(f"내신 계산값 반영: {float(loaded):.2f}")
                     st.rerun()
 
-        else:
-            lpad, center, rpad = st.columns([1, 2, 1])
-            with center:
-                st.markdown(f"**엑셀 내신 계산 화면 ({curriculum_label})**")
-                if curriculum_file.exists():
-                    st.download_button(
-                        f"{curriculum_label} 템플릿 다운로드",
-                        data=curriculum_file.read_bytes(),
-                        file_name=curriculum_file.name,
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    )
-                excel_file = st.file_uploader(
-                    f"내신 계산 엑셀 업로드(xlsx) - {curriculum_label}",
-                    type=["xlsx"],
-                    key="grade_xlsx_step2",
-                )
-                if excel_file and (curriculum_token not in excel_file.name):
-                    st.warning(f"현재 학년({current_grade_label})은 {curriculum_label} 사용 대상입니다. 업로드 파일을 다시 확인해 주세요.")
+        with st.expander("다른 업로드 박스 샘플 보기", expanded=False):
+            render_upload_box_samples()
 
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("엑셀 내신 계산", use_container_width=True):
-                    if not excel_file:
-                        st.warning(f"{curriculum_label} 엑셀 파일을 먼저 업로드해 주세요.")
+        grades_text = ""
+        default_manual = float(st.session_state.get("manual_grade_pdf", 2.5))
+        calc_grade = None
+
+        lpad, center, rpad = st.columns([1, 2, 1])
+        with center:
+            pdf_file = st.file_uploader("학생부 PDF 업로드", type=["pdf"], key="pdf_step2")
+        g1, g2 = st.columns(2)
+        with g1:
+            grades_text = st.text_input("과목별 내신 등급(쉼표 구분)", placeholder="예: 2.1, 2.3, 1.9, 2.4", key="grades_text_pdf")
+        with g2:
+            manual_grade = st.number_input("내신 평균(직접 입력, 선택)", min_value=1.0, max_value=9.0, value=default_manual, step=0.01, key="manual_grade_pdf")
+
+        if grades_text.strip():
+            try:
+                vals = [float(x.strip()) for x in grades_text.split(",") if x.strip()]
+                if vals:
+                    calc_grade = round(sum(vals) / len(vals), 2)
+                    st.caption(f"자동 계산 내신 평균: {calc_grade}")
+            except Exception:
+                st.warning("내신 등급 형식이 올바르지 않습니다. 예: 2.1, 2.3, 1.9")
+
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("PDF 분석 실행", use_container_width=True):
+                if not pdf_file:
+                    st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
+                else:
+                    text, text_source = extract_pdf_text(pdf_file)
+                    if not str(text).strip():
+                        st.error("파일 형태가 달라서 분석이 불가합니다. 분석을 하지 말고 PDF 파일로 다시 분석하세요.")
                     else:
-                        points = extract_grade_points_from_excel(excel_file)
-                        if not points:
-                            st.error("엑셀에서 등급 데이터를 찾지 못했습니다. 파일 형식을 확인해 주세요.")
+                        level, detail, summary, evidence = analyze_holistic_5level(text)
+                        pdf_points = extract_grade_points_from_pdf_text(text)
+                        if calc_grade is not None:
+                            grade_score = calc_grade
+                            grade_source = "수기 입력 계산"
+                        elif pdf_points:
+                            grade_score = round(sum(pdf_points) / len(pdf_points), 2)
+                            grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
                         else:
-                            raw_grade = round(sum(points) / len(points), 2)
-                            grade_score_9, grade_policy = convert_grade_to_9_scale(raw_grade, current_grade_label)
-                            st.session_state.holistic = {
-                                "pdf_summary": "엑셀 내신 계산으로 진행",
-                                "holistic_level": 0,
-                                "holistic_detail": {
-                                    "학업역량": 0,
-                                    "전공적합성": 0,
-                                    "자기주도성": 0,
-                                    "공동체역량": 0,
-                                    "발전가능성": 0,
-                                },
-                                "holistic_evidence": {},
-                                "holistic_score": 0.0,
-                                "student_grade_score": grade_score_9,
-                                "student_grade_source": f"엑셀 계산({len(points)}개) | {grade_policy}",
-                                "student_grade_raw": raw_grade,
-                            }
-                            st.success("엑셀 내신 계산이 완료되었습니다.")
-            with c2:
-                if st.button("3단계 이동", use_container_width=True):
-                    if not st.session_state.holistic:
-                        st.warning("먼저 엑셀 내신 계산을 실행해 주세요.")
-                    else:
-                        st.session_state.step = 3
-                        st.rerun()
+                            grade_score = float(manual_grade)
+                            grade_source = "직접 입력"
+                        grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+                        st.session_state.holistic = {
+                            "pdf_summary": summary,
+                            "holistic_level": level,
+                            "holistic_detail": detail,
+                            "holistic_evidence": evidence,
+                            "holistic_score": sum(detail.values()) / len(detail),
+                            "student_grade_score": grade_score_9,
+                            "student_grade_source": f"{grade_source} | {grade_policy}",
+                            "pdf_text_source": text_source,
+                            "student_grade_raw": grade_score,
+                        }
+                        st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
+        with c2:
+            if st.button("분석 생략 후 3단계 이동", use_container_width=True):
+                base_grade = calc_grade if calc_grade is not None else float(manual_grade)
+                grade_score_9, grade_policy = convert_grade_to_9_scale(base_grade, current_grade_label)
+                st.session_state.holistic = {
+                    "pdf_summary": "학생부 분석 생략",
+                    "holistic_level": 0,
+                    "holistic_detail": {
+                        "학업역량": 0,
+                        "전공적합성": 0,
+                        "자기주도성": 0,
+                        "공동체역량": 0,
+                        "발전가능성": 0,
+                    },
+                    "holistic_evidence": {},
+                    "holistic_score": 0.0,
+                    "student_grade_score": grade_score_9,
+                    "student_grade_source": f"분석 생략 | {grade_policy}",
+                    "student_grade_raw": base_grade,
+                }
+                st.session_state.step = 3
+                st.rerun()
 
         cnav1, cnav2 = st.columns(2)
         with cnav1:
@@ -1264,7 +1460,6 @@ def main() -> None:
                     st.caption("근거: 추출 없음")
         else:
             st.markdown("### 분석 결과")
-            st.info("학생부 PDF를 업로드하고 '분석 실행'을 누르면 이 영역에 결과가 표시됩니다.")
 
     # Step 3
     elif st.session_state.step == 3:
@@ -1348,10 +1543,16 @@ def main() -> None:
 
         st.info(f"진단 결과가 DB에 저장되었습니다: {DB_PATH}")
 
-    st.markdown("<div class='footer-note'>자료: 대학어디가  운영: 대치 수프리마</div>", unsafe_allow_html=True)
+    st.markdown("<div class='footer-note'>자료: 대학어디가 | 운영: 대치수프리마</div>", unsafe_allow_html=True)
 
 
 if __name__ == "__main__":
     main()
+
+
+
+
+
+
 
 
