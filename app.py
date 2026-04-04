@@ -3,6 +3,7 @@ import json
 import re
 import sqlite3
 import uuid
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -848,9 +849,9 @@ def _score_band_comment(score: float) -> str:
 def _student_record_summary(detail: Dict[str, int]) -> Tuple[str, List[str], List[str]]:
     if not detail:
         return "학생부 분석 데이터가 부족합니다.", [], ["학생부 원문 텍스트 추출(OCR 포함) 품질 점검 필요"]
-    ordered = sorted(detail.items(), key=lambda x: x[1], reverse=True)
+    ordered = sorted(detail.items(), key=lambda x: (-x[1], x[0]))
     strengths = [f"{k}({v}점)" for k, v in ordered[:2]]
-    gaps = [f"{k}({v}점)" for k, v in sorted(detail.items(), key=lambda x: x[1])[:2]]
+    gaps = [f"{k}({v}점)" for k, v in sorted(detail.items(), key=lambda x: (x[1], x[0]))[:2]]
     avg = sum(detail.values()) / len(detail)
     total_comment = f"학생부 5개 항목 평균은 {avg:.1f}점으로 '{_score_band_comment(avg)}' 수준입니다."
     actions = [
@@ -862,15 +863,17 @@ def _student_record_summary(detail: Dict[str, int]) -> Tuple[str, List[str], Lis
 
 def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_detail: Dict[str, int]) -> str:
     summary_counts = _support_summary(choices)
+    ordered_keys = ["학업역량", "전공적합성", "자기주도성", "공동체역량", "발전가능성"]
     lines = [
         "# 나의 입시 위치 진단 서비스 by 대치수프리마",
-        f"- 생성시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
         "",
         "## 0) 종합 요약",
         f"- 학생: {payload.get('student_name', '')} ({payload.get('grade', '')})",
         f"- 학생부 종합단계: {payload.get('holistic_level', 0)}단계",
         f"- 내신(판단용 9등급): {payload.get('student_grade_score', '')}",
         f"- 상향 가능: {summary_counts.get('상향 가능', 0)}개 / 적정: {summary_counts.get('적정', 0)}개 / 소신: {summary_counts.get('소신', 0)}개 / 하향 권장: {summary_counts.get('하향 권장', 0)}개",
+        f"- 학생부 텍스트 추출 방식: {payload.get('pdf_text_source', 'none')}",
+        f"- 학생부 분석 요약: {payload.get('pdf_summary', '')}",
         "",
         "## 1) 사용자 정보",
         f"- 컨설턴트: {payload.get('consultant_name', '')}",
@@ -886,14 +889,15 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
         "## 2) 학생부 분석 (5단계)",
         f"- 종합단계: {payload.get('holistic_level', 0)}단계",
     ]
-    for k, v in holistic_detail.items():
+    for k in ordered_keys:
+        v = holistic_detail.get(k, 0)
         lines.append(f"- {k}: {v}점")
         lines.append(f"  - 해석: {_score_band_comment(v)}")
 
     evidence = payload.get("holistic_evidence", {})
     lines.append("")
     lines.append("## 2-1) 학생부 항목별 근거 내용")
-    for k in ["학업역량", "전공적합성", "자기주도성", "공동체역량", "발전가능성"]:
+    for k in ordered_keys:
         ev = evidence.get(k, [])
         lines.append(f"- {k}:")
         if ev:
@@ -945,9 +949,9 @@ def build_report_text(payload: Dict, choices: List[SupportChoice], holistic_deta
 
 def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detail: Dict[str, int]) -> bytes:
     summary_counts = _support_summary(choices)
+    ordered_keys = ["학업역량", "전공적합성", "자기주도성", "공동체역량", "발전가능성"]
     doc = Document()
     doc.add_heading("나의 입시 위치 진단 서비스 by 대치수프리마", level=1)
-    doc.add_paragraph(f"생성시각: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
     doc.add_heading("0) 종합 요약", level=2)
     doc.add_paragraph(f"- 학생: {payload.get('student_name', '')} ({payload.get('grade', '')})")
@@ -957,6 +961,8 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
         f"- 상향 가능 {summary_counts.get('상향 가능', 0)}개 / 적정 {summary_counts.get('적정', 0)}개 / "
         f"소신 {summary_counts.get('소신', 0)}개 / 하향 권장 {summary_counts.get('하향 권장', 0)}개"
     )
+    doc.add_paragraph(f"- 학생부 텍스트 추출 방식: {payload.get('pdf_text_source', 'none')}")
+    doc.add_paragraph(f"- 학생부 분석 요약: {payload.get('pdf_summary', '')}")
 
     doc.add_heading("1) 사용자 정보", level=2)
     info_rows = [
@@ -975,13 +981,14 @@ def build_docx_bytes(payload: Dict, choices: List[SupportChoice], holistic_detai
 
     doc.add_heading("2) 학생부 분석 (5단계)", level=2)
     doc.add_paragraph(f"- 종합단계: {payload.get('holistic_level', 0)}단계")
-    for k, v in holistic_detail.items():
+    for k in ordered_keys:
+        v = holistic_detail.get(k, 0)
         doc.add_paragraph(f"- {k}: {v}점")
         doc.add_paragraph(f"  · 해석: {_score_band_comment(v)}")
 
     doc.add_heading("2-1) 학생부 항목별 근거 내용", level=2)
     evidence = payload.get("holistic_evidence", {})
-    for k in ["학업역량", "전공적합성", "자기주도성", "공동체역량", "발전가능성"]:
+    for k in ordered_keys:
         doc.add_paragraph(f"- {k}:")
         ev = evidence.get(k, [])
         if ev:
@@ -1385,34 +1392,41 @@ def main() -> None:
                 if not pdf_file:
                     st.error("학생부 PDF 파일을 먼저 업로드해 주세요.")
                 else:
-                    text, text_source = extract_pdf_text(pdf_file)
-                    if not str(text).strip():
-                        st.error("텍스트 추출과 OCR 자동분석 모두 실패했습니다. 스캔 품질이 높은 PDF로 다시 시도하거나 '분석 생략 후 3단계 이동'을 이용해 주세요.")
+                    pdf_bytes = pdf_file.getvalue()
+                    pdf_hash = hashlib.sha256(pdf_bytes).hexdigest()
+                    cached = st.session_state.holistic if st.session_state.holistic else {}
+                    if cached.get("pdf_hash") == pdf_hash and cached.get("holistic_detail"):
+                        st.info("동일한 PDF 파일은 이전 분석 결과를 그대로 사용합니다.")
                     else:
-                        level, detail, summary, evidence = analyze_holistic_5level(text)
-                        pdf_points = extract_grade_points_from_pdf_text(text)
-                        if calc_grade is not None:
-                            grade_score = calc_grade
-                            grade_source = "수기 입력 계산"
-                        elif pdf_points:
-                            grade_score = round(sum(pdf_points) / len(pdf_points), 2)
-                            grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
+                        text, text_source = extract_pdf_text(pdf_file)
+                        if not str(text).strip():
+                            st.error("텍스트 추출과 OCR 자동분석 모두 실패했습니다. 스캔 품질이 높은 PDF로 다시 시도하거나 '분석 생략 후 3단계 이동'을 이용해 주세요.")
                         else:
-                            grade_score = float(manual_grade)
-                            grade_source = "직접 입력"
-                        grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
-                        st.session_state.holistic = {
-                            "pdf_summary": summary,
-                            "holistic_level": level,
-                            "holistic_detail": detail,
-                            "holistic_evidence": evidence,
-                            "holistic_score": sum(detail.values()) / len(detail),
-                            "student_grade_score": grade_score_9,
-                            "student_grade_source": f"{grade_source} | {grade_policy}",
-                            "pdf_text_source": text_source,
-                            "student_grade_raw": grade_score,
-                        }
-                        st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
+                            level, detail, summary, evidence = analyze_holistic_5level(text)
+                            pdf_points = extract_grade_points_from_pdf_text(text)
+                            if calc_grade is not None:
+                                grade_score = calc_grade
+                                grade_source = "수기 입력 계산"
+                            elif pdf_points:
+                                grade_score = round(sum(pdf_points) / len(pdf_points), 2)
+                                grade_source = f"학생부 PDF 추출({len(pdf_points)}개)"
+                            else:
+                                grade_score = float(manual_grade)
+                                grade_source = "직접 입력"
+                            grade_score_9, grade_policy = convert_grade_to_9_scale(grade_score, current_grade_label)
+                            st.session_state.holistic = {
+                                "pdf_summary": summary,
+                                "holistic_level": level,
+                                "holistic_detail": detail,
+                                "holistic_evidence": evidence,
+                                "holistic_score": sum(detail.values()) / len(detail),
+                                "student_grade_score": grade_score_9,
+                                "student_grade_source": f"{grade_source} | {grade_policy}",
+                                "pdf_text_source": text_source,
+                                "student_grade_raw": grade_score,
+                                "pdf_hash": pdf_hash,
+                            }
+                            st.success("학생부 분석이 완료되었습니다. 아래에서 결과를 확인하세요.")
         with c2:
             if st.button("분석 생략 후 3단계 이동", use_container_width=True):
                 base_grade = calc_grade if calc_grade is not None else float(manual_grade)
@@ -1534,12 +1548,11 @@ def main() -> None:
         st.text_area("종합 보고서 미리보기", value=report_text, height=420)
 
         docx_bytes = build_docx_bytes(payload, choices, holistic_detail)
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         student_name = str(payload.get("student_name", "학생")).strip() or "학생"
         st.download_button(
             "DOC 보고서 다운로드",
             data=docx_bytes,
-            file_name=f"종합보고서_{student_name}_{stamp}.docx",
+            file_name=f"종합보고서_{student_name}.docx",
             mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         )
 
